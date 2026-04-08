@@ -13,7 +13,12 @@
 #include "esphome/components/sensor/sensor.h"
 #endif
 
+// Use stub when microlink library is not available
+#if __has_include("microlink.h")
 #include "microlink.h"
+#else
+#include "microlink_stub.h"
+#endif
 
 namespace esphome {
 namespace tailscale {

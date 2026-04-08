@@ -5,3 +5,5 @@ secrets.yaml
 __pycache__/
 *.pyc
 .omc/
+screenshots/
+include_fix/

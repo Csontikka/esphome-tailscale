@@ -34,6 +34,7 @@ wifi:
 
 logger:
   level: DEBUG
+  hardware_uart: UART0
 
 api:
 
