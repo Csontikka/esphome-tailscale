@@ -1,0 +1,7 @@
+secrets.yaml
+.esphome/
+.deploy_key
+.deploy_key.pub
+__pycache__/
+*.pyc
+.omc/
