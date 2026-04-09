@@ -34,7 +34,13 @@ text_sensor:
 
 sensor:
   - platform: tailscale
-    peer_count:
-      name: "Tailscale Peers Actual"
-    max_peers:
+    peers_total:
+      name: "Tailscale Peers Total"
+    peers_online:
+      name: "Tailscale Peers Online"
+    peers_direct:
+      name: "Tailscale Peers Direct"
+    peers_derp:
+      name: "Tailscale Peers DERP"
+    peers_max:
       name: "Tailscale Peers Max"
