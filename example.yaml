@@ -17,7 +17,7 @@ external_components:
 tailscale:
   auth_key: !secret tailscale_auth_key
   hostname: "esp32-tailscale"
-  configured_ip: "init"  # Set to your Tailscale VPN IP after first boot
+  tailscale_ip: "init"  # Set to your Tailscale VPN IP after first boot
   # max_peers: 16        # Optional, default 16
 
 wifi:
