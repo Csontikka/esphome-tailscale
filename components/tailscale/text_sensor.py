@@ -8,6 +8,7 @@ from . import TailscaleComponent, tailscale_ns
 CONF_TAILSCALE_ID = "tailscale_id"
 CONF_TAILSCALE_HOSTNAME = "tailscale_hostname"
 CONF_MEMORY_MODE = "memory_mode"
+CONF_PEER_STATUS = "peer_status"
 CONF_SETUP_STATUS = "setup_status"
 CONF_MAGICDNS = "magicdns"
 CONF_PEER_LIST = "peer_list"
@@ -31,6 +32,9 @@ CONFIG_SCHEMA = cv.Schema(
             entity_category="diagnostic",
         ),
         cv.Optional(CONF_PEER_LIST): text_sensor.text_sensor_schema(
+            entity_category="diagnostic",
+        ),
+        cv.Optional(CONF_PEER_STATUS): text_sensor.text_sensor_schema(
             entity_category="diagnostic",
         ),
     }
@@ -63,3 +67,7 @@ async def to_code(config):
     if peer_list_config := config.get(CONF_PEER_LIST):
         sens = await text_sensor.new_text_sensor(peer_list_config)
         cg.add(parent.set_peer_list_text_sensor(sens))
+
+    if peer_status_config := config.get(CONF_PEER_STATUS):
+        sens = await text_sensor.new_text_sensor(peer_status_config)
+        cg.add(parent.set_peer_status_text_sensor(sens))

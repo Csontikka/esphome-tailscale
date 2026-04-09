@@ -278,6 +278,30 @@ void TailscaleComponent::publish_state_() {
     this->max_peers_sensor_->publish_state(static_cast<float>(this->max_peers_));
   }
 #endif
+
+#ifdef USE_TEXT_SENSOR
+  if (this->peer_status_sensor_ != nullptr) {
+    int peers = this->get_peer_count();
+    int max = this->max_peers_;
+    std::string status;
+    if (peers >= max) {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "FULL %d/%d", peers, max);
+      status = buf;
+    } else if (peers >= max - 2) {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "Warning %d/%d", peers, max);
+      status = buf;
+    } else {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "OK %d/%d", peers, max);
+      status = buf;
+    }
+    if (force || this->peer_status_sensor_->state != status) {
+      this->peer_status_sensor_->publish_state(status);
+    }
+  }
+#endif
 }
 
 void TailscaleComponent::check_ip_config_(const char *vpn_ip) {
