@@ -13,11 +13,20 @@ binary_sensor:
 text_sensor:
   - platform: tailscale
     ip_address:
+      id: tailscale_ip_sensor
       name: "Tailscale IP"
     tailscale_hostname:
       name: "Tailscale Hostname"
     memory_mode:
       name: "Tailscale Memory"
+    setup_status:
+      name: "Tailscale Setup Status"
+    magicdns:
+      name: "Tailscale MagicDNS"
+    peer_list:
+      name: "Tailscale Peer List"
+      entity_category: diagnostic
+      disabled_by_default: false
 
 sensor:
   - platform: tailscale

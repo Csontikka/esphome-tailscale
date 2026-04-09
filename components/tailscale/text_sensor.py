@@ -8,6 +8,9 @@ from . import TailscaleComponent, tailscale_ns
 CONF_TAILSCALE_ID = "tailscale_id"
 CONF_TAILSCALE_HOSTNAME = "tailscale_hostname"
 CONF_MEMORY_MODE = "memory_mode"
+CONF_SETUP_STATUS = "setup_status"
+CONF_MAGICDNS = "magicdns"
+CONF_PEER_LIST = "peer_list"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -19,6 +22,15 @@ CONFIG_SCHEMA = cv.Schema(
             entity_category="diagnostic",
         ),
         cv.Optional(CONF_MEMORY_MODE): text_sensor.text_sensor_schema(
+            entity_category="diagnostic",
+        ),
+        cv.Optional(CONF_SETUP_STATUS): text_sensor.text_sensor_schema(
+            entity_category="diagnostic",
+        ),
+        cv.Optional(CONF_MAGICDNS): text_sensor.text_sensor_schema(
+            entity_category="diagnostic",
+        ),
+        cv.Optional(CONF_PEER_LIST): text_sensor.text_sensor_schema(
             entity_category="diagnostic",
         ),
     }
@@ -39,3 +51,15 @@ async def to_code(config):
     if memory_config := config.get(CONF_MEMORY_MODE):
         sens = await text_sensor.new_text_sensor(memory_config)
         cg.add(parent.set_memory_mode_text_sensor(sens))
+
+    if status_config := config.get(CONF_SETUP_STATUS):
+        sens = await text_sensor.new_text_sensor(status_config)
+        cg.add(parent.set_setup_status_text_sensor(sens))
+
+    if magicdns_config := config.get(CONF_MAGICDNS):
+        sens = await text_sensor.new_text_sensor(magicdns_config)
+        cg.add(parent.set_magicdns_text_sensor(sens))
+
+    if peer_list_config := config.get(CONF_PEER_LIST):
+        sens = await text_sensor.new_text_sensor(peer_list_config)
+        cg.add(parent.set_peer_list_text_sensor(sens))

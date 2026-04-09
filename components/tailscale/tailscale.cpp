@@ -175,6 +175,69 @@ void TailscaleComponent::publish_state_() {
   if (this->hostname_sensor_ != nullptr && !this->hostname_.empty()) {
     this->hostname_sensor_->publish_state(this->hostname_);
   }
+  if (this->setup_status_sensor_ != nullptr) {
+    std::string vpn = this->get_vpn_ip();
+    if (vpn.empty()) {
+      this->setup_status_sensor_->publish_state("Waiting for Tailscale...");
+    } else {
+      this->setup_status_sensor_->publish_state("OK - VPN IP: " + vpn);
+    }
+  }
+  if (this->magicdns_sensor_ != nullptr && this->ml_ != nullptr) {
+    // MagicDNS: find our own entry by matching VPN IP
+    uint32_t our_ip = microlink_get_vpn_ip(this->ml_);
+    if (our_ip != 0) {
+      int count = microlink_get_peer_count(this->ml_);
+      for (int i = 0; i < count; i++) {
+        microlink_peer_info_t info;
+        if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK) {
+          if (info.vpn_ip == our_ip) {
+            this->magicdns_sensor_->publish_state(std::string(info.hostname));
+            break;
+          }
+        }
+      }
+      // If not found in peer list, construct from hostname + tailnet
+      if (this->magicdns_sensor_->state.empty() || this->magicdns_sensor_->state == "unknown") {
+        // Try to get tailnet domain from any peer's FQDN
+        if (count > 0) {
+          microlink_peer_info_t info;
+          if (microlink_get_peer_info(this->ml_, 0, &info) == ESP_OK) {
+            std::string fqdn(info.hostname);
+            auto dot = fqdn.find('.');
+            if (dot != std::string::npos) {
+              std::string domain = fqdn.substr(dot);  // .tail13ca7.ts.net
+              this->magicdns_sensor_->publish_state(this->hostname_ + domain);
+            }
+          }
+        }
+      }
+    }
+  }
+  if (this->peer_list_sensor_ != nullptr && this->ml_ != nullptr) {
+    int count = microlink_get_peer_count(this->ml_);
+    // Compact format: "name(ip)D|name(ip)R|..." D=direct R=relay
+    // Max ~250 chars to fit text_sensor limit
+    std::string list;
+    for (int i = 0; i < count; i++) {
+      microlink_peer_info_t info;
+      if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
+        std::string name(info.hostname);
+        auto dot = name.find('.');
+        if (dot != std::string::npos) name = name.substr(0, dot);
+        char ip_str[16];
+        microlink_ip_to_str(info.vpn_ip, ip_str);
+        std::string entry = name + "(" + ip_str + ")" + (info.direct_path ? "D" : "R");
+        if (!list.empty()) list += "|";
+        if (list.size() + entry.size() > 240) {
+          list += "...";
+          break;
+        }
+        list += entry;
+      }
+    }
+    this->peer_list_sensor_->publish_state(list);
+  }
   if (this->memory_mode_sensor_ != nullptr) {
     size_t psram = esp_psram_get_size();
     if (psram > 0) {
@@ -196,12 +259,15 @@ void TailscaleComponent::publish_state_() {
 
 void TailscaleComponent::check_ip_config_(const char *vpn_ip) {
   this->vpn_ip_str_ = vpn_ip;
+  this->ip_notify_pending_ = true;
   ESP_LOGW(TAG, "Tailscale VPN IP: %s - update var_tailscale_ip in your ESPHome config if still set to 'init'", vpn_ip);
 }
 
 void TailscaleComponent::send_ip_notification_() {
-  // Notification is handled via the status text sensor
-  // HA automation can watch for "init" status and notify the user
+  if (!this->ip_notify_pending_ || this->vpn_ip_str_.empty())
+    return;
+  // Notification handled by publishing to the IP text sensor
+  // The HA automation in the package watches for changes
   this->ip_notify_pending_ = false;
 }
 
