@@ -1,18 +1,13 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import sensor
-from esphome.const import CONF_ID, STATE_CLASS_MEASUREMENT
+from esphome.const import STATE_CLASS_MEASUREMENT
 
-from . import TailscaleComponent, tailscale_ns
+from . import TailscaleComponent
 
 CONF_TAILSCALE_ID = "tailscale_id"
-CONF_PEERS_TOTAL = "peers_total"
-CONF_PEERS_ONLINE = "peers_online"
-CONF_PEERS_DIRECT = "peers_direct"
-CONF_PEERS_DERP = "peers_derp"
-CONF_PEERS_MAX = "peers_max"
 
-PEER_SENSOR = sensor.sensor_schema(
+PEER_SCHEMA = sensor.sensor_schema(
     accuracy_decimals=0,
     state_class=STATE_CLASS_MEASUREMENT,
     entity_category="diagnostic",
@@ -21,11 +16,11 @@ PEER_SENSOR = sensor.sensor_schema(
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_TAILSCALE_ID): cv.use_id(TailscaleComponent),
-        cv.Optional(CONF_PEERS_TOTAL): PEER_SENSOR,
-        cv.Optional(CONF_PEERS_ONLINE): PEER_SENSOR,
-        cv.Optional(CONF_PEERS_DIRECT): PEER_SENSOR,
-        cv.Optional(CONF_PEERS_DERP): PEER_SENSOR,
-        cv.Optional(CONF_PEERS_MAX): sensor.sensor_schema(
+        cv.Optional("peers_total", default={"name": "Tailscale Peers Total"}): PEER_SCHEMA,
+        cv.Optional("peers_online", default={"name": "Tailscale Peers Online"}): PEER_SCHEMA,
+        cv.Optional("peers_direct", default={"name": "Tailscale Peers Direct"}): PEER_SCHEMA,
+        cv.Optional("peers_derp", default={"name": "Tailscale Peers DERP"}): PEER_SCHEMA,
+        cv.Optional("peers_max", default={"name": "Tailscale Peers Max"}): sensor.sensor_schema(
             accuracy_decimals=0,
             entity_category="diagnostic",
         ),
@@ -36,13 +31,12 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     parent = await cg.get_variable(config[CONF_TAILSCALE_ID])
 
-    for conf_key, setter in [
-        (CONF_PEERS_TOTAL, "set_peers_total_sensor"),
-        (CONF_PEERS_ONLINE, "set_peers_online_sensor"),
-        (CONF_PEERS_DIRECT, "set_peers_direct_sensor"),
-        (CONF_PEERS_DERP, "set_peers_derp_sensor"),
-        (CONF_PEERS_MAX, "set_peers_max_sensor"),
+    for key, setter in [
+        ("peers_total", "set_peers_total_sensor"),
+        ("peers_online", "set_peers_online_sensor"),
+        ("peers_direct", "set_peers_direct_sensor"),
+        ("peers_derp", "set_peers_derp_sensor"),
+        ("peers_max", "set_peers_max_sensor"),
     ]:
-        if sub_config := config.get(conf_key):
-            sens = await sensor.new_sensor(sub_config)
-            cg.add(getattr(parent, setter)(sens))
+        sens = await sensor.new_sensor(config[key])
+        cg.add(getattr(parent, setter)(sens))
