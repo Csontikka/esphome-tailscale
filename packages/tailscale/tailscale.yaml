@@ -1,6 +1,7 @@
 tailscale:
   auth_key: ${var_tailscale_auth_key}
   hostname: ${var_tailscale_hostname}
+  configured_ip: ${var_tailscale_ip}
 
 wifi:
   use_address: ${var_tailscale_ip}

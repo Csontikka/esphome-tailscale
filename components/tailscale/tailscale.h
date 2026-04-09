@@ -35,6 +35,7 @@ class TailscaleComponent : public PollingComponent {
   void set_enable_disco(bool enable) { this->enable_disco_ = enable; }
   void set_max_peers(uint8_t max) { this->max_peers_ = max; }
   void set_login_server(const std::string &server) { this->login_server_ = server; }
+  void set_configured_ip(const std::string &ip) { this->configured_ip_ = ip; }
 
 #ifdef USE_BINARY_SENSOR
   void set_connected_binary_sensor(binary_sensor::BinarySensor *sensor) {
@@ -89,6 +90,7 @@ class TailscaleComponent : public PollingComponent {
   bool enable_disco_{true};
   uint8_t max_peers_{16};
   std::string login_server_;
+  std::string configured_ip_{"init"};
 
   // Runtime
   microlink_t *ml_{nullptr};
