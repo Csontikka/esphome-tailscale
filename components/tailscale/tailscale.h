@@ -99,6 +99,7 @@ class TailscaleComponent : public PollingComponent {
   std::atomic<bool> state_changed_{false};
   bool psram_available_{false};
   bool ip_notify_pending_{false};
+  bool force_publish_{true};
   std::string vpn_ip_str_;
 
 #ifdef USE_BINARY_SENSOR
