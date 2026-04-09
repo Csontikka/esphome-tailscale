@@ -163,28 +163,32 @@ void TailscaleComponent::publish_state_() {
   bool connected = this->is_connected();
 
 #ifdef USE_BINARY_SENSOR
-  if (this->connected_sensor_ != nullptr) {
+  if (this->connected_sensor_ != nullptr && this->connected_sensor_->state != connected) {
     this->connected_sensor_->publish_state(connected);
   }
 #endif
 
 #ifdef USE_TEXT_SENSOR
-  if (this->ip_address_sensor_ != nullptr) {
-    this->ip_address_sensor_->publish_state(this->get_vpn_ip());
+  std::string vpn_ip = this->get_vpn_ip();
+  if (this->ip_address_sensor_ != nullptr && this->ip_address_sensor_->state != vpn_ip) {
+    this->ip_address_sensor_->publish_state(vpn_ip);
   }
-  if (this->hostname_sensor_ != nullptr && !this->hostname_.empty()) {
+  if (this->hostname_sensor_ != nullptr && this->hostname_sensor_->state != this->hostname_) {
     this->hostname_sensor_->publish_state(this->hostname_);
   }
   if (this->setup_status_sensor_ != nullptr) {
-    std::string vpn = this->get_vpn_ip();
-    if (vpn.empty()) {
-      this->setup_status_sensor_->publish_state("Waiting for Tailscale...");
+    std::string status;
+    if (vpn_ip.empty()) {
+      status = "Waiting for Tailscale...";
     } else if (this->configured_ip_ == "init" || this->configured_ip_.empty()) {
-      this->setup_status_sensor_->publish_state("Set var_tailscale_ip to: " + vpn);
-    } else if (this->configured_ip_ != vpn) {
-      this->setup_status_sensor_->publish_state("IP mismatch! Change " + this->configured_ip_ + " to " + vpn);
+      status = "Set var_tailscale_ip to: " + vpn_ip;
+    } else if (this->configured_ip_ != vpn_ip) {
+      status = "IP mismatch! Change " + this->configured_ip_ + " to " + vpn_ip;
     } else {
-      this->setup_status_sensor_->publish_state("OK");
+      status = "OK";
+    }
+    if (this->setup_status_sensor_->state != status) {
+      this->setup_status_sensor_->publish_state(status);
     }
   }
   if (this->magicdns_sensor_ != nullptr && this->ml_ != nullptr) {
@@ -240,9 +244,12 @@ void TailscaleComponent::publish_state_() {
         list += entry;
       }
     }
-    this->peer_list_sensor_->publish_state(list);
+    if (this->peer_list_sensor_->state != list) {
+      this->peer_list_sensor_->publish_state(list);
+    }
   }
-  if (this->memory_mode_sensor_ != nullptr) {
+  if (this->memory_mode_sensor_ != nullptr && this->memory_mode_sensor_->state.empty()) {
+    // Memory mode never changes - publish once
     size_t psram = esp_psram_get_size();
     if (psram > 0) {
       char buf[32];
@@ -256,7 +263,10 @@ void TailscaleComponent::publish_state_() {
 
 #ifdef USE_SENSOR
   if (this->peer_count_sensor_ != nullptr) {
-    this->peer_count_sensor_->publish_state(static_cast<float>(this->get_peer_count()));
+    float count = static_cast<float>(this->get_peer_count());
+    if (this->peer_count_sensor_->state != count) {
+      this->peer_count_sensor_->publish_state(count);
+    }
   }
 #endif
 }
