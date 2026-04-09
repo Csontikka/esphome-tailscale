@@ -1,0 +1,36 @@
+/* Override Kconfig string defaults for ESPHome integration */
+#ifndef CONFIG_ML_PRIORITY_PEER_IP
+#define CONFIG_ML_PRIORITY_PEER_IP "100.118.204.29"
+#endif
+#ifndef CONFIG_ML_WIFI_SSID
+#define CONFIG_ML_WIFI_SSID ""
+#endif
+#ifndef CONFIG_ML_WIFI_PASSWORD
+#define CONFIG_ML_WIFI_PASSWORD ""
+#endif
+#ifndef CONFIG_ML_TAILSCALE_AUTH_KEY
+#define CONFIG_ML_TAILSCALE_AUTH_KEY ""
+#endif
+#ifndef CONFIG_ML_DEVICE_NAME
+#define CONFIG_ML_DEVICE_NAME ""
+#endif
+#ifndef CONFIG_ML_MAX_PEERS
+#define CONFIG_ML_MAX_PEERS 16
+#endif
+#ifndef CONFIG_ML_H2_BUFFER_SIZE_KB
+#ifdef CONFIG_SPIRAM
+#define CONFIG_ML_H2_BUFFER_SIZE_KB 512
+#else
+#define CONFIG_ML_H2_BUFFER_SIZE_KB 64
+#endif
+#endif
+#ifndef CONFIG_ML_JSON_BUFFER_SIZE_KB
+#ifdef CONFIG_SPIRAM
+#define CONFIG_ML_JSON_BUFFER_SIZE_KB 512
+#else
+#define CONFIG_ML_JSON_BUFFER_SIZE_KB 64
+#endif
+#endif
+#ifndef CONFIG_ML_NVS_MAX_PEERS
+#define CONFIG_ML_NVS_MAX_PEERS 64
+#endif
