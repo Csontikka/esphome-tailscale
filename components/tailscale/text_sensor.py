@@ -17,6 +17,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("setup_status", default={"name": "Tailscale Setup Hint"}): TS_SCHEMA,
         cv.Optional("peer_status", default={"name": "Tailscale Peer Status"}): TS_SCHEMA,
         cv.Optional("magicdns", default={"name": "Tailscale MagicDNS"}): TS_SCHEMA,
+        cv.Optional("peer_list", default={"name": "Tailscale Peer List"}): TS_SCHEMA,
+        cv.Optional("tailnet_name", default={"name": "Tailscale Tailnet"}): TS_SCHEMA,
+        cv.Optional("auth_key_status", default={"name": "Tailscale Auth Key Status"}): TS_SCHEMA,
     }
 )
 
@@ -31,6 +34,9 @@ async def to_code(config):
         ("setup_status", "set_setup_status_text_sensor"),
         ("peer_status", "set_peer_status_text_sensor"),
         ("magicdns", "set_magicdns_text_sensor"),
+        ("peer_list", "set_peer_list_text_sensor"),
+        ("tailnet_name", "set_tailnet_name_text_sensor"),
+        ("auth_key_status", "set_auth_key_status_text_sensor"),
     ]:
         sens = await text_sensor.new_text_sensor(config[key])
         cg.add(getattr(parent, setter)(sens))

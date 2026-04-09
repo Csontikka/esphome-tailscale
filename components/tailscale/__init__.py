@@ -10,7 +10,7 @@ from esphome.components import binary_sensor, text_sensor, sensor
 
 CODEOWNERS = ["@esphome-tailscale"]
 DEPENDENCIES = ["wifi", "esp32"]
-AUTO_LOAD = ["binary_sensor", "text_sensor", "sensor"]
+AUTO_LOAD = ["binary_sensor", "text_sensor", "sensor", "button", "switch"]
 
 CONF_AUTH_KEY = "auth_key"
 CONF_HOSTNAME = "hostname"

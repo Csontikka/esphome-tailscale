@@ -32,6 +32,17 @@ text_sensor:
       name: "Tailscale Peer Status"
     magicdns:
       name: "Tailscale MagicDNS"
+    peer_list:
+      name: "Tailscale Peer List"
+    tailnet_name:
+      name: "Tailscale Tailnet"
+    auth_key_status:
+      name: "Tailscale Auth Key Status"
+
+button:
+  - platform: tailscale
+    reconnect:
+      name: "Tailscale Reconnect"
 
 sensor:
   - platform: tailscale
@@ -43,3 +54,12 @@ sensor:
       name: "Tailscale Peers DERP"
     peers_max:
       name: "Tailscale Peers Max"
+    uptime:
+      name: "Tailscale Uptime"
+
+switch:
+  - platform: tailscale
+    derp_enabled:
+      name: "Tailscale DERP"
+    tailscale_enabled:
+      name: "Tailscale Enabled"
