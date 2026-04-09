@@ -1,0 +1,50 @@
+name: Check microlink upstream updates
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'  # Every Monday at 8:00 UTC
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for upstream changes
+        id: check
+        run: |
+          # Get latest commit from upstream
+          UPSTREAM_SHA=$(git ls-remote https://github.com/CamM2325/microlink.git HEAD | cut -f1)
+          # Get latest commit from our fork
+          FORK_SHA=$(git ls-remote https://github.com/Csontikka/microlink.git HEAD | cut -f1)
+
+          echo "upstream=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          echo "fork=$FORK_SHA" >> $GITHUB_OUTPUT
+
+          if [ "$UPSTREAM_SHA" != "$FORK_SHA" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Upstream has new commits!"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Fork is up to date."
+          fi
+
+      - name: Create issue if upstream changed
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-update'
+            });
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Microlink upstream has new updates',
+                body: `The upstream [CamM2325/microlink](https://github.com/CamM2325/microlink) has new commits.\n\nUpstream: \`${{ steps.check.outputs.upstream }}\`\nFork: \`${{ steps.check.outputs.fork }}\`\n\n**Action needed:**\n1. Sync fork on GitHub (Csontikka/microlink → Sync fork)\n2. Review changes for breaking changes\n3. Copy updated microlink/ into this repo\n4. Test build + flash`,
+                labels: ['upstream-update']
+              });
+            }
