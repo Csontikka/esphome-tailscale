@@ -17,7 +17,9 @@ packages:
       var_tailscale_auth_key: !secret tailscale_auth_key
       var_tailscale_hostname: "esp32-tailscale"
       var_tailscale_ip: "init"  # Set to your Tailscale VPN IP after first boot
-      var_tailscale_max_peers: "16"
+      # Optional: override in your tailscale: section if needed
+      # tailscale:
+      #   max_peers: 32
 
 wifi:
   ssid: !secret wifi_ssid
