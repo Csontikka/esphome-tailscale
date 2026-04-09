@@ -86,6 +86,40 @@ void TailscaleComponent::update() {
   // Force-publish all sensors on polling interval (for web_server SSE)
   this->force_publish_ = true;
 
+  // Periodic log hints every 10 minutes (30s polling * 20 = 10min)
+  this->hint_counter_++;
+  if (this->hint_counter_ >= 20) {
+    this->hint_counter_ = 0;
+    if (!this->vpn_ip_str_.empty()) {
+      ESP_LOGI(TAG, "Hint: set 'wifi: use_address: \"%s\"' in your ESPHome YAML if device is not visible in Builder",
+               this->vpn_ip_str_.c_str());
+    }
+    // Peer capacity warnings
+    int online = 0, direct = 0, relay = 0;
+    int total = this->get_peer_count();
+    for (int i = 0; i < total; i++) {
+      microlink_peer_info_t info;
+      if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
+        online++;
+        if (info.direct_path) direct++; else relay++;
+      }
+    }
+    if (online >= this->max_peers_) {
+      ESP_LOGW(TAG, "Peer limit FULL: %d/%d online peers. Increase max_peers or remove unused peers from your tailnet.",
+               online, (int)this->max_peers_);
+    } else if (online >= this->max_peers_ - 2) {
+      ESP_LOGW(TAG, "Peer limit WARNING: %d/%d online peers. Approaching max_peers limit.",
+               online, (int)this->max_peers_);
+    }
+    // Periodic status summary
+    ESP_LOGI(TAG, "Status: %s | peers %d/%d (direct=%d relay=%d) | free heap %uKB | PSRAM free %uKB | uptime %us",
+             this->is_connected() ? "connected" : "disconnected",
+             online, (int)this->max_peers_, direct, relay,
+             (unsigned)(esp_get_free_heap_size() / 1024),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+             (unsigned)(millis() / 1000));
+  }
+
   this->publish_state_();
 }
 
@@ -183,22 +217,14 @@ void TailscaleComponent::publish_state_() {
     this->hostname_sensor_->publish_state(this->hostname_);
   }
   if (this->setup_status_sensor_ != nullptr) {
-    std::string status;
+    std::string hint;
     if (vpn_ip.empty()) {
-      status = "Waiting for Tailscale...";
+      hint = "Waiting for Tailscale...";
     } else {
-      std::string use_addr = wifi::global_wifi_component->get_use_address();
-      bool has_use_addr = !use_addr.empty() && use_addr != this->hostname_ && use_addr.find(".local") == std::string::npos;
-      if (!has_use_addr) {
-        status = "Set wifi use_address to: " + vpn_ip;
-      } else if (use_addr != vpn_ip) {
-        status = "Update use_address from " + use_addr + " to " + vpn_ip;
-      } else {
-        status = "OK";
-      }
+      hint = "wifi use_address: " + vpn_ip;
     }
-    if (force || this->setup_status_sensor_->state != status) {
-      this->setup_status_sensor_->publish_state(status);
+    if (force || this->setup_status_sensor_->state != hint) {
+      this->setup_status_sensor_->publish_state(hint);
     }
   }
   if (this->magicdns_sensor_ != nullptr && this->ml_ != nullptr) {
@@ -315,13 +341,7 @@ void TailscaleComponent::publish_state_() {
 void TailscaleComponent::check_ip_config_(const char *vpn_ip) {
   this->vpn_ip_str_ = vpn_ip;
   this->ip_notify_pending_ = true;
-  std::string use_addr = wifi::global_wifi_component->get_use_address();
-  bool has_use_addr = !use_addr.empty() && use_addr.find(".local") == std::string::npos;
-  if (!has_use_addr) {
-    ESP_LOGW(TAG, "Set wifi use_address: \"%s\" in your ESPHome config", vpn_ip);
-  } else if (use_addr != std::string(vpn_ip)) {
-    ESP_LOGW(TAG, "Update wifi use_address from \"%s\" to \"%s\"", use_addr.c_str(), vpn_ip);
-  }
+  ESP_LOGI(TAG, "Set wifi use_address: \"%s\" in your ESPHome YAML", vpn_ip);
 }
 
 void TailscaleComponent::send_ip_notification_() {

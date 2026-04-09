@@ -14,7 +14,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("ip_address", default={"name": "Tailscale IP"}): TS_SCHEMA,
         cv.Optional("tailscale_hostname", default={"name": "Tailscale Hostname"}): TS_SCHEMA,
         cv.Optional("memory_mode", default={"name": "Tailscale Memory"}): TS_SCHEMA,
-        cv.Optional("setup_status", default={"name": "Tailscale Setup Status"}): TS_SCHEMA,
+        cv.Optional("setup_status", default={"name": "Tailscale Setup Hint"}): TS_SCHEMA,
         cv.Optional("peer_status", default={"name": "Tailscale Peer Status"}): TS_SCHEMA,
         cv.Optional("magicdns", default={"name": "Tailscale MagicDNS"}): TS_SCHEMA,
     }
