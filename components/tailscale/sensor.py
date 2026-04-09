@@ -6,18 +6,26 @@ from esphome.const import CONF_ID, STATE_CLASS_MEASUREMENT
 from . import TailscaleComponent, tailscale_ns
 
 CONF_TAILSCALE_ID = "tailscale_id"
-CONF_PEER_COUNT = "peer_count"
-CONF_MAX_PEERS = "max_peers"
+CONF_PEERS_TOTAL = "peers_total"
+CONF_PEERS_ONLINE = "peers_online"
+CONF_PEERS_DIRECT = "peers_direct"
+CONF_PEERS_DERP = "peers_derp"
+CONF_PEERS_MAX = "peers_max"
+
+PEER_SENSOR = sensor.sensor_schema(
+    accuracy_decimals=0,
+    state_class=STATE_CLASS_MEASUREMENT,
+    entity_category="diagnostic",
+)
 
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_TAILSCALE_ID): cv.use_id(TailscaleComponent),
-        cv.Optional(CONF_PEER_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            state_class=STATE_CLASS_MEASUREMENT,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_MAX_PEERS): sensor.sensor_schema(
+        cv.Optional(CONF_PEERS_TOTAL): PEER_SENSOR,
+        cv.Optional(CONF_PEERS_ONLINE): PEER_SENSOR,
+        cv.Optional(CONF_PEERS_DIRECT): PEER_SENSOR,
+        cv.Optional(CONF_PEERS_DERP): PEER_SENSOR,
+        cv.Optional(CONF_PEERS_MAX): sensor.sensor_schema(
             accuracy_decimals=0,
             entity_category="diagnostic",
         ),
@@ -28,10 +36,13 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     parent = await cg.get_variable(config[CONF_TAILSCALE_ID])
 
-    if peer_config := config.get(CONF_PEER_COUNT):
-        sens = await sensor.new_sensor(peer_config)
-        cg.add(parent.set_peer_count_sensor(sens))
-
-    if max_config := config.get(CONF_MAX_PEERS):
-        sens = await sensor.new_sensor(max_config)
-        cg.add(parent.set_max_peers_sensor(sens))
+    for conf_key, setter in [
+        (CONF_PEERS_TOTAL, "set_peers_total_sensor"),
+        (CONF_PEERS_ONLINE, "set_peers_online_sensor"),
+        (CONF_PEERS_DIRECT, "set_peers_direct_sensor"),
+        (CONF_PEERS_DERP, "set_peers_derp_sensor"),
+        (CONF_PEERS_MAX, "set_peers_max_sensor"),
+    ]:
+        if sub_config := config.get(conf_key):
+            sens = await sensor.new_sensor(sub_config)
+            cg.add(getattr(parent, setter)(sens))

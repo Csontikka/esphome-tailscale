@@ -67,12 +67,11 @@ class TailscaleComponent : public PollingComponent {
   }
 #endif
 #ifdef USE_SENSOR
-  void set_peer_count_sensor(sensor::Sensor *sensor) {
-    this->peer_count_sensor_ = sensor;
-  }
-  void set_max_peers_sensor(sensor::Sensor *sensor) {
-    this->max_peers_sensor_ = sensor;
-  }
+  void set_peers_total_sensor(sensor::Sensor *sensor) { this->peers_total_sensor_ = sensor; }
+  void set_peers_online_sensor(sensor::Sensor *sensor) { this->peers_online_sensor_ = sensor; }
+  void set_peers_direct_sensor(sensor::Sensor *sensor) { this->peers_direct_sensor_ = sensor; }
+  void set_peers_derp_sensor(sensor::Sensor *sensor) { this->peers_derp_sensor_ = sensor; }
+  void set_peers_max_sensor(sensor::Sensor *sensor) { this->peers_max_sensor_ = sensor; }
 #endif
 
   bool is_connected() const;
@@ -121,8 +120,11 @@ class TailscaleComponent : public PollingComponent {
   text_sensor::TextSensor *peer_list_sensor_{nullptr};
 #endif
 #ifdef USE_SENSOR
-  sensor::Sensor *peer_count_sensor_{nullptr};
-  sensor::Sensor *max_peers_sensor_{nullptr};
+  sensor::Sensor *peers_total_sensor_{nullptr};
+  sensor::Sensor *peers_online_sensor_{nullptr};
+  sensor::Sensor *peers_direct_sensor_{nullptr};
+  sensor::Sensor *peers_derp_sensor_{nullptr};
+  sensor::Sensor *peers_max_sensor_{nullptr};
 #endif
 };
 

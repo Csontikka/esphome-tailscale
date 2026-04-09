@@ -268,34 +268,38 @@ void TailscaleComponent::publish_state_() {
 #endif
 
 #ifdef USE_SENSOR
-  if (this->peer_count_sensor_ != nullptr) {
-    float count = static_cast<float>(this->get_peer_count());
-    if (force || this->peer_count_sensor_->state != count) {
-      this->peer_count_sensor_->publish_state(count);
+  // Count peers by type
+  int total = this->get_peer_count();
+  int online = 0, direct = 0, derp = 0;
+  if (this->ml_ != nullptr) {
+    for (int i = 0; i < total; i++) {
+      microlink_peer_info_t info;
+      if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
+        online++;
+        if (info.direct_path) direct++; else derp++;
+      }
     }
   }
-  if (this->max_peers_sensor_ != nullptr && this->max_peers_sensor_->state != static_cast<float>(this->max_peers_)) {
-    this->max_peers_sensor_->publish_state(static_cast<float>(this->max_peers_));
-  }
+
+  auto pub_sensor = [force](sensor::Sensor *s, float val) {
+    if (s != nullptr && (force || s->state != val)) s->publish_state(val);
+  };
+  pub_sensor(this->peers_total_sensor_, static_cast<float>(total));
+  pub_sensor(this->peers_online_sensor_, static_cast<float>(online));
+  pub_sensor(this->peers_direct_sensor_, static_cast<float>(direct));
+  pub_sensor(this->peers_derp_sensor_, static_cast<float>(derp));
+  pub_sensor(this->peers_max_sensor_, static_cast<float>(this->max_peers_));
 #endif
 
 #ifdef USE_TEXT_SENSOR
   if (this->peer_status_sensor_ != nullptr) {
-    int peers = this->get_peer_count();
-    int max = this->max_peers_;
     std::string status;
-    if (peers >= max) {
-      char buf[48];
-      snprintf(buf, sizeof(buf), "FULL %d/%d", peers, max);
-      status = buf;
-    } else if (peers >= max - 2) {
-      char buf[48];
-      snprintf(buf, sizeof(buf), "Warning %d/%d", peers, max);
-      status = buf;
+    if (online >= this->max_peers_) {
+      status = "Full";
+    } else if (online >= this->max_peers_ - 2) {
+      status = "Warning";
     } else {
-      char buf[48];
-      snprintf(buf, sizeof(buf), "OK %d/%d", peers, max);
-      status = buf;
+      status = "OK";
     }
     if (force || this->peer_status_sensor_->state != status) {
       this->peer_status_sensor_->publish_state(status);
