@@ -22,7 +22,7 @@ tailscale:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  # use_address: "100.105.79.114"  # Set to Tailscale VPN IP after first boot
+  # use_address: "100.x.x.x"  # Set to your Tailscale VPN IP after first boot
 
 logger:
   level: DEBUG

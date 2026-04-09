@@ -1,6 +1,6 @@
 /* Override Kconfig string defaults for ESPHome integration */
 #ifndef CONFIG_ML_PRIORITY_PEER_IP
-#define CONFIG_ML_PRIORITY_PEER_IP "100.118.204.29"
+#define CONFIG_ML_PRIORITY_PEER_IP ""
 #endif
 #ifndef CONFIG_ML_WIFI_SSID
 #define CONFIG_ML_WIFI_SSID ""
