@@ -75,6 +75,7 @@ async def to_code(config):
     add_idf_sdkconfig_option("CONFIG_LWIP_IP_FORWARD", True)
     add_idf_sdkconfig_option("CONFIG_LWIP_IPV6", True)
     add_idf_sdkconfig_option("CONFIG_LWIP_CHECK_THREAD_SAFETY", False)
+    add_idf_sdkconfig_option("CONFIG_LWIP_MAX_SOCKETS", 24)
     # mbedTLS: WireGuard crypto (ChaCha20-Poly1305) + Tailscale control plane TLS
     add_idf_sdkconfig_option("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE", True)
     add_idf_sdkconfig_option("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL", True)
