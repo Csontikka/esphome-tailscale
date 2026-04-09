@@ -588,9 +588,9 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 									if (header_len < pbuf->tot_len) {
 										pbuf_realloc(pbuf, header_len);
 									}
-									// Send packet to be processed by LWIP
-									printf("[WG_TO_IP] Passing %u bytes to lwIP\n", (unsigned)pbuf->tot_len); fflush(stdout);
-									ip_input(pbuf, device->netif);
+									// Send packet to lwIP via tcpip_input (thread-safe)
+									// ip_input crashes when called from WG task context
+									tcpip_input(pbuf, device->netif);
 									// pbuf is owned by IP layer now
 									pbuf = NULL;
 								} else {
