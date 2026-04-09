@@ -19,8 +19,6 @@ CONF_ENABLE_STUN = "enable_stun"
 CONF_ENABLE_DISCO = "enable_disco"
 CONF_MAX_PEERS = "max_peers"
 CONF_LOGIN_SERVER = "login_server"
-CONF_TAILSCALE_IP = "tailscale_ip"
-
 tailscale_ns = cg.esphome_ns.namespace("tailscale")
 TailscaleComponent = tailscale_ns.class_("TailscaleComponent", cg.PollingComponent)
 
@@ -34,7 +32,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_ENABLE_DISCO, default=True): cv.boolean,
         cv.Optional(CONF_MAX_PEERS, default=16): cv.int_range(min=1, max=64),
         cv.Optional(CONF_LOGIN_SERVER, default=""): cv.string,
-        cv.Optional(CONF_TAILSCALE_IP, default="init"): cv.string,
     }
 ).extend(cv.polling_component_schema("30s"))
 
@@ -49,16 +46,6 @@ async def to_code(config):
     cg.add(var.set_enable_stun(config[CONF_ENABLE_STUN]))
     cg.add(var.set_enable_disco(config[CONF_ENABLE_DISCO]))
     cg.add(var.set_max_peers(config[CONF_MAX_PEERS]))
-    tailscale_ip = config[CONF_TAILSCALE_IP]
-    cg.add(var.set_configured_ip(tailscale_ip))
-
-    # Set WiFi use_address to Tailscale IP so ESPHome Builder/HA finds the device via VPN
-    if tailscale_ip and tailscale_ip != "init":
-        cg.add_define("TAILSCALE_USE_ADDRESS", tailscale_ip)
-        # Inject use_address via raw C++ - WiFi component reads this at runtime
-        cg.add(cg.RawExpression(
-            f'wifi::global_wifi_component->set_use_address("{tailscale_ip}")'
-        ))
 
     if config[CONF_LOGIN_SERVER]:
         cg.add(var.set_login_server(config[CONF_LOGIN_SERVER]))

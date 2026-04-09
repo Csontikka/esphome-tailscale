@@ -186,12 +186,16 @@ void TailscaleComponent::publish_state_() {
     std::string status;
     if (vpn_ip.empty()) {
       status = "Waiting for Tailscale...";
-    } else if (this->configured_ip_ == "init" || this->configured_ip_.empty()) {
-      status = "Set tailscale_ip to: " + vpn_ip;
-    } else if (this->configured_ip_ != vpn_ip) {
-      status = "IP mismatch! Change " + this->configured_ip_ + " to " + vpn_ip;
     } else {
-      status = "OK";
+      std::string use_addr = wifi::global_wifi_component->get_use_address();
+      bool has_use_addr = !use_addr.empty() && use_addr != this->hostname_ && use_addr.find(".local") == std::string::npos;
+      if (!has_use_addr) {
+        status = "Set wifi use_address to: " + vpn_ip;
+      } else if (use_addr != vpn_ip) {
+        status = "Update use_address from " + use_addr + " to " + vpn_ip;
+      } else {
+        status = "OK";
+      }
     }
     if (force || this->setup_status_sensor_->state != status) {
       this->setup_status_sensor_->publish_state(status);
@@ -311,10 +315,12 @@ void TailscaleComponent::publish_state_() {
 void TailscaleComponent::check_ip_config_(const char *vpn_ip) {
   this->vpn_ip_str_ = vpn_ip;
   this->ip_notify_pending_ = true;
-  if (this->configured_ip_ == "init" || this->configured_ip_.empty()) {
-    ESP_LOGW(TAG, "Set tailscale_ip: \"%s\" in your ESPHome config (currently 'init')", vpn_ip);
-  } else if (this->configured_ip_ != std::string(vpn_ip)) {
-    ESP_LOGW(TAG, "IP mismatch! Change tailscale_ip from \"%s\" to \"%s\"", this->configured_ip_.c_str(), vpn_ip);
+  std::string use_addr = wifi::global_wifi_component->get_use_address();
+  bool has_use_addr = !use_addr.empty() && use_addr.find(".local") == std::string::npos;
+  if (!has_use_addr) {
+    ESP_LOGW(TAG, "Set wifi use_address: \"%s\" in your ESPHome config", vpn_ip);
+  } else if (use_addr != std::string(vpn_ip)) {
+    ESP_LOGW(TAG, "Update wifi use_address from \"%s\" to \"%s\"", use_addr.c_str(), vpn_ip);
   }
 }
 

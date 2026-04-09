@@ -17,13 +17,12 @@ external_components:
 tailscale:
   auth_key: !secret tailscale_auth_key
   hostname: "esp32-tailscale"
-  tailscale_ip: "init"  # Set to your Tailscale VPN IP after first boot
-  # max_peers: 16        # Optional, default 16
+  # max_peers: 16  # Optional, default 16
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  use_address: 100.105.79.114  # Set to Tailscale IP for ESPHome Builder
+  # use_address: "100.105.79.114"  # Set to Tailscale VPN IP after first boot
 
 logger:
   level: DEBUG
