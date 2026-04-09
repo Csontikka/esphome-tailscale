@@ -3,8 +3,10 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
+    STATE_CLASS_MEASUREMENT,
 )
 from esphome.components.esp32 import add_idf_sdkconfig_option
+from esphome.components import binary_sensor, text_sensor, sensor
 
 CODEOWNERS = ["@esphome-tailscale"]
 DEPENDENCIES = ["wifi", "esp32"]
@@ -34,7 +36,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_LOGIN_SERVER, default=""): cv.string,
         cv.Optional(CONF_CONFIGURED_IP, default="init"): cv.string,
     }
-).extend(cv.polling_component_schema("10s"))
+).extend(cv.polling_component_schema("30s"))
 
 
 async def to_code(config):
@@ -47,11 +49,13 @@ async def to_code(config):
     cg.add(var.set_enable_stun(config[CONF_ENABLE_STUN]))
     cg.add(var.set_enable_disco(config[CONF_ENABLE_DISCO]))
     cg.add(var.set_max_peers(config[CONF_MAX_PEERS]))
+    cg.add(var.set_configured_ip(config[CONF_CONFIGURED_IP]))
 
     if config[CONF_LOGIN_SERVER]:
         cg.add(var.set_login_server(config[CONF_LOGIN_SERVER]))
 
-    cg.add(var.set_configured_ip(config[CONF_CONFIGURED_IP]))
+    # Sensors are created via platform YAML files (binary_sensor.py, text_sensor.py, sensor.py)
+    # They are auto-loaded and auto-configured - user doesn't need to add them manually
 
     # Find project root (where microlink submodule lives)
     this_dir = os.path.dirname(os.path.abspath(__file__))

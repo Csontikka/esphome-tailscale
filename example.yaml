@@ -10,15 +10,6 @@ esp32:
 external_components:
   - source: components
 
-packages:
-  tailscale_config: !include
-    file: packages/tailscale/tailscale.yaml
-    vars:
-      var_tailscale_auth_key: !secret tailscale_auth_key
-      var_tailscale_hostname: "esp32-tailscale"
-      var_tailscale_ip: "init"  # Set to your Tailscale VPN IP after first boot
-      # var_tailscale_max_peers: "16"  # Optional, default 16
-
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -34,3 +25,9 @@ web_server:
 
 ota:
   platform: esphome
+
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  hostname: "esp32-tailscale"
+  configured_ip: "init"  # Set to your Tailscale VPN IP after first boot
+  # max_peers: 16        # Optional, default 16
