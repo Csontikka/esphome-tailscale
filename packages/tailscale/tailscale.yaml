@@ -1,6 +1,7 @@
 tailscale:
   auth_key: ${var_tailscale_auth_key}
   hostname: ${var_tailscale_hostname}
+  update_interval: 30s
   configured_ip: ${var_tailscale_ip}
 
 wifi:
