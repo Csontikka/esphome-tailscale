@@ -20,10 +20,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("peers_online", default={"name": "Tailscale Peers Online"}): PEER_SCHEMA,
         cv.Optional("peers_direct", default={"name": "Tailscale Peers Direct"}): PEER_SCHEMA,
         cv.Optional("peers_derp", default={"name": "Tailscale Peers DERP"}): PEER_SCHEMA,
-        cv.Optional("peers_max", default={"name": "Tailscale Peers Max"}): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
+        cv.Optional("peers_max", default={"name": "Tailscale Peers Max"}): PEER_SCHEMA,
     }
 )
 
