@@ -23,10 +23,6 @@ text_sensor:
       name: "Tailscale Setup Status"
     magicdns:
       name: "Tailscale MagicDNS"
-    peer_list:
-      name: "Tailscale Peer List"
-      entity_category: diagnostic
-      disabled_by_default: false
 
 sensor:
   - platform: tailscale
