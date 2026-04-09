@@ -16,7 +16,7 @@ packages:
     vars:
       var_tailscale_auth_key: !secret tailscale_auth_key
       var_tailscale_hostname: "esp32-tailscale"
-      var_tailscale_ip: "100.105.79.114"
+      var_tailscale_ip: "init"  # Set to your Tailscale VPN IP after first boot
 
 wifi:
   ssid: !secret wifi_ssid
@@ -27,6 +27,9 @@ logger:
   hardware_uart: UART0
 
 api:
+
+web_server:
+  port: 80
 
 ota:
   platform: esphome

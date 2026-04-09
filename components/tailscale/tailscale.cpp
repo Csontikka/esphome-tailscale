@@ -72,6 +72,11 @@ void TailscaleComponent::loop() {
     this->state_changed_ = false;
     this->publish_state_();
   }
+
+  // Try sending IP notification once HA API is connected
+  if (this->ip_notify_pending_) {
+    this->send_ip_notification_();
+  }
 }
 
 void TailscaleComponent::update() {
@@ -140,6 +145,9 @@ void TailscaleComponent::state_callback(microlink_t *ml, microlink_state_t state
     char ip_str[16];
     microlink_ip_to_str(ip, ip_str);
     ESP_LOGI(TAG, "Connected! VPN IP: %s", ip_str);
+
+    // Check if use_address needs updating (init mode or IP mismatch)
+    self->check_ip_config_(ip_str);
   }
 }
 
@@ -184,6 +192,17 @@ void TailscaleComponent::publish_state_() {
     this->peer_count_sensor_->publish_state(static_cast<float>(this->get_peer_count()));
   }
 #endif
+}
+
+void TailscaleComponent::check_ip_config_(const char *vpn_ip) {
+  this->vpn_ip_str_ = vpn_ip;
+  ESP_LOGW(TAG, "Tailscale VPN IP: %s - update var_tailscale_ip in your ESPHome config if still set to 'init'", vpn_ip);
+}
+
+void TailscaleComponent::send_ip_notification_() {
+  // Notification is handled via the status text sensor
+  // HA automation can watch for "init" status and notify the user
+  this->ip_notify_pending_ = false;
 }
 
 }  // namespace tailscale

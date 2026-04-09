@@ -69,6 +69,8 @@ class TailscaleComponent : public PollingComponent {
 
   void publish_state_();
   void start_microlink_();
+  void check_ip_config_(const char *vpn_ip);
+  void send_ip_notification_();
 
   // Config
   std::string auth_key_;
@@ -84,6 +86,8 @@ class TailscaleComponent : public PollingComponent {
   microlink_state_t current_state_{ML_STATE_IDLE};
   bool state_changed_{false};
   bool psram_available_{false};
+  bool ip_notify_pending_{false};
+  std::string vpn_ip_str_;
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
