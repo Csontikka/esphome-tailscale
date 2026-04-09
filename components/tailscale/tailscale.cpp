@@ -274,6 +274,9 @@ void TailscaleComponent::publish_state_() {
       this->peer_count_sensor_->publish_state(count);
     }
   }
+  if (this->max_peers_sensor_ != nullptr && this->max_peers_sensor_->state != static_cast<float>(this->max_peers_)) {
+    this->max_peers_sensor_->publish_state(static_cast<float>(this->max_peers_));
+  }
 #endif
 }
 
