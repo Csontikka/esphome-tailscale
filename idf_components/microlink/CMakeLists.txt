@@ -1,41 +1,22 @@
-# Wrapper CMakeLists for microlink ESP-IDF component
-# Builds microlink without driver/esp_driver_tsens dependencies
-# Cellular and HTTP config server are disabled via Kconfig (not defined)
-
-set(ML_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/../../microlink/components/microlink/src")
-set(ML_INC_DIR "${CMAKE_CURRENT_LIST_DIR}/../../microlink/components/microlink/include")
-
 set(SRCS
-    "${ML_SRC_DIR}/microlink.c"
-    "${ML_SRC_DIR}/ml_coord.c"
-    "${ML_SRC_DIR}/ml_derp.c"
-    "${ML_SRC_DIR}/ml_net_io.c"
-    "${ML_SRC_DIR}/ml_wg_mgr.c"
-    "${ML_SRC_DIR}/ml_stun.c"
-    "${ML_SRC_DIR}/ml_noise.c"
-    "${ML_SRC_DIR}/ml_h2.c"
-    "${ML_SRC_DIR}/ml_udp.c"
-    "${ML_SRC_DIR}/ml_tcp.c"
-    "${ML_SRC_DIR}/ml_peer_nvs.c"
-    "${ML_SRC_DIR}/nacl_box.c"
-    "${ML_SRC_DIR}/ml_zerocopy.c"
-    "${ML_SRC_DIR}/ml_config_httpd.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/microlink.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_coord.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_derp.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_net_io.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_wg_mgr.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_stun.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_noise.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_h2.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_udp.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_tcp.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_peer_nvs.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/nacl_box.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_zerocopy.c"
+    "C:/devuser2/esphome_tailscale/microlink/components/microlink/src/ml_config_httpd.c"
 )
-
 idf_component_register(
     SRCS ${SRCS}
-    INCLUDE_DIRS
-        "${ML_INC_DIR}"
-        "${ML_SRC_DIR}"
-    REQUIRES
-        nvs_flash
-        esp_wifi
-        esp_netif
-        esp_event
-        esp_timer
-        lwip
-        mbedtls
-        json
-    PRIV_REQUIRES
-        wireguard_lwip
+    INCLUDE_DIRS "C:/devuser2/esphome_tailscale/microlink/components/microlink/include" "C:/devuser2/esphome_tailscale/microlink/components/microlink/src"
+    REQUIRES nvs_flash esp_wifi esp_netif esp_event esp_timer lwip mbedtls json
+    PRIV_REQUIRES wireguard_lwip
 )

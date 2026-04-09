@@ -51,8 +51,11 @@ async def to_code(config):
 
     # Add microlink ESP-IDF components to the build
     # Find the project root (where microlink submodule lives)
-    this_dir = os.path.dirname(__file__)
+    this_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(this_dir, "..", ".."))
+    import logging
+    _log = logging.getLogger(__name__)
+    _log.info(f"Tailscale component: this_dir={this_dir} project_root={project_root}")
     idf_components = os.path.join(project_root, "idf_components").replace("\\", "/")
     wg_components = os.path.join(
         project_root, "microlink", "components", "microlink", "components"
@@ -84,13 +87,47 @@ async def to_code(config):
     cg.add_build_flag(f"-I{ml_src}")
     cg.add_build_flag(f"-include {override_h}")
 
-    # Copy patch_cmake.py to the build directory so extra_scripts can find it
-    import shutil
+    # Remove any stale CMakeLists.txt with old EXTRA_COMPONENT_DIRS from cache
     import esphome.core as core
+    stale_cmake = os.path.join(core.CORE.relative_build_path(""), "CMakeLists.txt")
+    if os.path.exists(stale_cmake):
+        content = open(stale_cmake).read()
+        if "/idf_components" in content and "/config/esphome/idf_components" not in content:
+            os.remove(stale_cmake)
+            _log.info("Removed stale CMakeLists.txt with bad EXTRA_COMPONENT_DIRS")
 
-    build_dir = core.CORE.relative_build_path("")
-    patch_src = os.path.join(this_dir, "patch_cmake.py")
-    patch_dst = os.path.join(build_dir, "patch_cmake.py")
-    os.makedirs(build_dir, exist_ok=True)
-    shutil.copy2(patch_src, patch_dst)
-    cg.add_platformio_option("extra_scripts", ["pre:patch_cmake.py"])
+    # Add microlink and wireguard as IDF components via ESPHome API
+    from esphome.components.esp32 import add_idf_component
+
+    ml_src = os.path.join(project_root, "microlink", "components", "microlink", "src").replace("\\", "/")
+    ml_inc = os.path.join(project_root, "microlink", "components", "microlink", "include").replace("\\", "/")
+
+    # Overwrite the wrapper CMakeLists.txt with absolute paths
+    microlink_cmake = os.path.join(idf_components, "microlink", "CMakeLists.txt")
+    with open(microlink_cmake, "w") as f:
+        f.write(f'''set(SRCS
+    "{ml_src}/microlink.c"
+    "{ml_src}/ml_coord.c"
+    "{ml_src}/ml_derp.c"
+    "{ml_src}/ml_net_io.c"
+    "{ml_src}/ml_wg_mgr.c"
+    "{ml_src}/ml_stun.c"
+    "{ml_src}/ml_noise.c"
+    "{ml_src}/ml_h2.c"
+    "{ml_src}/ml_udp.c"
+    "{ml_src}/ml_tcp.c"
+    "{ml_src}/ml_peer_nvs.c"
+    "{ml_src}/nacl_box.c"
+    "{ml_src}/ml_zerocopy.c"
+    "{ml_src}/ml_config_httpd.c"
+)
+idf_component_register(
+    SRCS ${{SRCS}}
+    INCLUDE_DIRS "{ml_inc}" "{ml_src}"
+    REQUIRES nvs_flash esp_wifi esp_netif esp_event esp_timer lwip mbedtls json
+    PRIV_REQUIRES wireguard_lwip
+)
+''')
+
+    add_idf_component(name="microlink", path=os.path.join(idf_components, "microlink"))
+    add_idf_component(name="wireguard_lwip", path=os.path.join(idf_components, "wireguard_lwip"))
