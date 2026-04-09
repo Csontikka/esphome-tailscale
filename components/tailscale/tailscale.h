@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
 
@@ -94,8 +95,8 @@ class TailscaleComponent : public PollingComponent {
 
   // Runtime
   microlink_t *ml_{nullptr};
-  microlink_state_t current_state_{ML_STATE_IDLE};
-  bool state_changed_{false};
+  std::atomic<microlink_state_t> current_state_{ML_STATE_IDLE};
+  std::atomic<bool> state_changed_{false};
   bool psram_available_{false};
   bool ip_notify_pending_{false};
   std::string vpn_ip_str_;
