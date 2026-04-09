@@ -180,6 +180,9 @@ struct wireguard_peer {
 
 	// We set this flag on RX/TX of packets if we think that we should initiate a new handshake
 	bool send_handshake;
+
+	// Last inner source IP seen from this peer (for reply routing)
+	ip_addr_t last_source_ip;
 };
 
 struct wireguard_device {

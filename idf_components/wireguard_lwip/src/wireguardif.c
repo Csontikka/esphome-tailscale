@@ -339,19 +339,26 @@ static err_t wireguardif_output(struct netif *netif, struct pbuf *q, const ip4_a
 
 	struct wireguard_peer *peer = peer_lookup_by_allowed_ip(device, &addr);
 	if (!peer) {
-		// Fallback: find the most recently active peer with a valid session
+		// Fallback: check the source IP → peer mapping table
 		// This handles Tailscale subnet routing where reply dest IP
 		// doesn't match any peer's allowed_ip
-		uint32_t best_rx = 0;
 		for (int i = 0; i < WIREGUARD_MAX_PEERS; i++) {
 			struct wireguard_peer *p = &device->peers[i];
-			if (p->valid && p->curr_keypair.valid && p->last_rx > best_rx) {
-				best_rx = p->last_rx;
+			if (p->valid && p->curr_keypair.valid && ip_addr_cmp(&p->last_source_ip, &addr)) {
 				peer = p;
+				break;
 			}
 		}
-		if (peer) {
-			printf("[WG_OUTPUT] Fallback peer for %s (last_rx=%lu)\n", ipaddr_ntoa(&addr), (unsigned long)best_rx); fflush(stdout);
+		// Final fallback: most recently active peer
+		if (!peer) {
+			uint32_t best_rx = 0;
+			for (int i = 0; i < WIREGUARD_MAX_PEERS; i++) {
+				struct wireguard_peer *p = &device->peers[i];
+				if (p->valid && p->curr_keypair.valid && p->last_rx > best_rx) {
+					best_rx = p->last_rx;
+					peer = p;
+				}
+			}
 		}
 	}
 	if (peer) {
@@ -552,6 +559,8 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 								// subnet routing where inner src IP may differ from peer's VPN IP
 								dest_ok = true;
 								header_len = PP_NTOHS(IPH_LEN(iphdr));
+								// Remember source IP → peer mapping for reply routing
+								ip_addr_copy(peer->last_source_ip, src_ip);
 								if (!dest_ok) {
 									printf("[WG_RX_IP] DROPPED: src not in allowed_source_ips. src=%d.%d.%d.%d\n",
 										ip4_addr1_16(ip_2_ip4(&src_ip)), ip4_addr2_16(ip_2_ip4(&src_ip)),
