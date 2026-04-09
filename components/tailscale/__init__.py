@@ -54,11 +54,11 @@ async def to_code(config):
 
     # Set WiFi use_address to Tailscale IP so ESPHome Builder/HA finds the device via VPN
     if tailscale_ip and tailscale_ip != "init":
-        from esphome.components.wifi import WiFiComponent
-        wifi_var = await cg.get_variable(
-            cg.ID("", is_declaration=False, type=WiFiComponent)
-        )
-        cg.add(wifi_var.set_use_address(tailscale_ip))
+        cg.add_define("TAILSCALE_USE_ADDRESS", tailscale_ip)
+        # Inject use_address via raw C++ - WiFi component reads this at runtime
+        cg.add(cg.RawExpression(
+            f'wifi::global_wifi_component->set_use_address("{tailscale_ip}")'
+        ))
 
     if config[CONF_LOGIN_SERVER]:
         cg.add(var.set_login_server(config[CONF_LOGIN_SERVER]))
