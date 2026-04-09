@@ -51,3 +51,9 @@ text_sensor:
 
 sensor:
   - platform: tailscale
+
+button:
+  - platform: tailscale
+
+switch:
+  - platform: tailscale

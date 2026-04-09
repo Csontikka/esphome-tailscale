@@ -14,6 +14,13 @@
 #include "esphome/components/sensor/sensor.h"
 #endif
 
+#ifdef USE_BUTTON
+#include "esphome/components/button/button.h"
+#endif
+#ifdef USE_SWITCH
+#include "esphome/components/switch/switch.h"
+#endif
+
 #include "microlink.h"
 
 namespace esphome {
@@ -64,6 +71,12 @@ class TailscaleComponent : public PollingComponent {
   void set_peer_list_text_sensor(text_sensor::TextSensor *sensor) {
     this->peer_list_sensor_ = sensor;
   }
+  void set_tailnet_name_text_sensor(text_sensor::TextSensor *sensor) {
+    this->tailnet_name_sensor_ = sensor;
+  }
+  void set_auth_key_status_text_sensor(text_sensor::TextSensor *sensor) {
+    this->auth_key_status_sensor_ = sensor;
+  }
 #endif
 #ifdef USE_SENSOR
   void set_peers_total_sensor(sensor::Sensor *sensor) { this->peers_total_sensor_ = sensor; }
@@ -71,11 +84,17 @@ class TailscaleComponent : public PollingComponent {
   void set_peers_direct_sensor(sensor::Sensor *sensor) { this->peers_direct_sensor_ = sensor; }
   void set_peers_derp_sensor(sensor::Sensor *sensor) { this->peers_derp_sensor_ = sensor; }
   void set_peers_max_sensor(sensor::Sensor *sensor) { this->peers_max_sensor_ = sensor; }
+  void set_uptime_sensor(sensor::Sensor *sensor) { this->uptime_sensor_ = sensor; }
 #endif
 
   bool is_connected() const;
   std::string get_vpn_ip() const;
   int get_peer_count() const;
+  void request_reconnect();
+  void set_derp_enabled(bool enabled);
+  void set_tailscale_enabled(bool enabled);
+  void confirm_derp_rollback();
+  void confirm_enable_rollback();
 
  protected:
   // Static callbacks for microlink
@@ -105,6 +124,22 @@ class TailscaleComponent : public PollingComponent {
   bool force_publish_{true};
   uint8_t hint_counter_{0};
   std::string vpn_ip_str_;
+  std::string tailnet_name_;
+  uint32_t connected_since_ms_{0};
+
+  // Reconnect state machine
+  enum ReconnectPhase : uint8_t { RECONNECT_IDLE, RECONNECT_REBIND, RECONNECT_FULL, RECONNECT_REBOOT };
+  ReconnectPhase reconnect_phase_{RECONNECT_IDLE};
+  uint32_t reconnect_start_ms_{0};
+
+  // Switch rollback state (60s dead man's switch)
+  bool derp_rollback_pending_{false};
+  bool derp_rollback_value_{true};  // value to restore on rollback
+  uint32_t derp_rollback_ms_{0};
+  bool enable_rollback_pending_{false};
+  bool enable_rollback_value_{true};
+  uint32_t enable_rollback_ms_{0};
+  bool tailscale_user_enabled_{true};
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
@@ -117,6 +152,8 @@ class TailscaleComponent : public PollingComponent {
   text_sensor::TextSensor *setup_status_sensor_{nullptr};
   text_sensor::TextSensor *magicdns_sensor_{nullptr};
   text_sensor::TextSensor *peer_list_sensor_{nullptr};
+  text_sensor::TextSensor *tailnet_name_sensor_{nullptr};
+  text_sensor::TextSensor *auth_key_status_sensor_{nullptr};
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *peers_total_sensor_{nullptr};
@@ -124,8 +161,48 @@ class TailscaleComponent : public PollingComponent {
   sensor::Sensor *peers_direct_sensor_{nullptr};
   sensor::Sensor *peers_derp_sensor_{nullptr};
   sensor::Sensor *peers_max_sensor_{nullptr};
+  sensor::Sensor *uptime_sensor_{nullptr};
 #endif
 };
+
+#ifdef USE_BUTTON
+class TailscaleReconnectButton : public button::Button, public Component {
+ public:
+  void set_parent(TailscaleComponent *parent) { this->parent_ = parent; }
+
+ protected:
+  void press_action() override { this->parent_->request_reconnect(); }
+  TailscaleComponent *parent_{nullptr};
+};
+#endif
+
+#ifdef USE_SWITCH
+class TailscaleDerpSwitch : public switch_::Switch, public Component {
+ public:
+  void set_parent(TailscaleComponent *parent) { this->parent_ = parent; }
+  void setup() override { this->publish_state(true); }
+
+ protected:
+  void write_state(bool state) override {
+    this->parent_->set_derp_enabled(state);
+    this->publish_state(state);
+  }
+  TailscaleComponent *parent_{nullptr};
+};
+
+class TailscaleEnableSwitch : public switch_::Switch, public Component {
+ public:
+  void set_parent(TailscaleComponent *parent) { this->parent_ = parent; }
+  void setup() override { this->publish_state(true); }
+
+ protected:
+  void write_state(bool state) override {
+    this->parent_->set_tailscale_enabled(state);
+    this->publish_state(state);
+  }
+  TailscaleComponent *parent_{nullptr};
+};
+#endif
 
 }  // namespace tailscale
 }  // namespace esphome

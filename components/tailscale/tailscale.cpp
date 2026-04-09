@@ -63,9 +63,28 @@ void TailscaleComponent::start_microlink_() {
 }
 
 void TailscaleComponent::loop() {
-  // Start microlink only after WiFi is connected
-  if (this->ml_ == nullptr && wifi::global_wifi_component->is_connected()) {
+  // Start microlink only after WiFi is connected (and user hasn't disabled)
+  if (this->ml_ == nullptr && this->tailscale_user_enabled_ && wifi::global_wifi_component->is_connected()) {
     this->start_microlink_();
+  }
+
+  // 60s rollback timers for switches
+  if (this->derp_rollback_pending_ && (millis() - this->derp_rollback_ms_ > 60000)) {
+    ESP_LOGW(TAG, "DERP rollback: no confirmation in 60s, restoring previous state");
+    this->enable_derp_ = this->derp_rollback_value_;
+    this->derp_rollback_pending_ = false;
+    if (this->ml_ != nullptr) this->request_reconnect();
+  }
+  if (this->enable_rollback_pending_ && (millis() - this->enable_rollback_ms_ > 60000)) {
+    ESP_LOGW(TAG, "Enable rollback: no confirmation in 60s, restoring previous state");
+    this->tailscale_user_enabled_ = this->enable_rollback_value_;
+    this->enable_rollback_pending_ = false;
+    if (!this->tailscale_user_enabled_ && this->ml_ != nullptr) {
+      microlink_stop(this->ml_);
+      microlink_destroy(this->ml_);
+      this->ml_ = nullptr;
+    }
+    this->state_changed_ = true;
   }
 
   if (this->state_changed_) {
@@ -76,6 +95,39 @@ void TailscaleComponent::loop() {
   // Try sending IP notification once HA API is connected
   if (this->ip_notify_pending_) {
     this->send_ip_notification_();
+  }
+
+  // Reconnect state machine
+  if (this->reconnect_phase_ != RECONNECT_IDLE && this->ml_ != nullptr) {
+    uint32_t elapsed = millis() - this->reconnect_start_ms_;
+    switch (this->reconnect_phase_) {
+      case RECONNECT_REBIND:
+        if (this->is_connected()) {
+          ESP_LOGI(TAG, "Reconnect: rebind succeeded");
+          this->reconnect_phase_ = RECONNECT_IDLE;
+        } else if (elapsed > 15000) {
+          ESP_LOGW(TAG, "Reconnect: rebind failed after 15s, trying full restart...");
+          microlink_stop(this->ml_);
+          microlink_destroy(this->ml_);
+          this->ml_ = nullptr;
+          this->reconnect_phase_ = RECONNECT_FULL;
+          this->reconnect_start_ms_ = millis();
+          // Will re-init in next loop() via start_microlink_()
+        }
+        break;
+      case RECONNECT_FULL:
+        if (this->is_connected()) {
+          ESP_LOGI(TAG, "Reconnect: full restart succeeded");
+          this->reconnect_phase_ = RECONNECT_IDLE;
+        } else if (elapsed > 30000) {
+          ESP_LOGE(TAG, "Reconnect: full restart failed after 30s, rebooting device...");
+          this->reconnect_phase_ = RECONNECT_REBOOT;
+          App.safe_reboot();
+        }
+        break;
+      default:
+        break;
+    }
   }
 }
 
@@ -178,6 +230,7 @@ void TailscaleComponent::state_callback(microlink_t *ml, microlink_state_t state
   ESP_LOGI(TAG, "State: %s", name);
 
   if (state == ML_STATE_CONNECTED) {
+    self->connected_since_ms_ = millis();
     uint32_t ip = microlink_get_vpn_ip(ml);
     char ip_str[16];
     microlink_ip_to_str(ip, ip_str);
@@ -185,6 +238,9 @@ void TailscaleComponent::state_callback(microlink_t *ml, microlink_state_t state
 
     // Check if use_address needs updating (init mode or IP mismatch)
     self->check_ip_config_(ip_str);
+  } else if (state != ML_STATE_CONNECTED) {
+    self->connected_since_ms_ = 0;
+    self->tailnet_name_.clear();
   }
 }
 
@@ -258,6 +314,32 @@ void TailscaleComponent::publish_state_() {
       }
     }
   }
+  if (this->auth_key_status_sensor_ != nullptr) {
+    std::string key_status = connected ? "Active" : "Unknown";
+    if (force || this->auth_key_status_sensor_->state != key_status) {
+      this->auth_key_status_sensor_->publish_state(key_status);
+    }
+  }
+  if (this->tailnet_name_sensor_ != nullptr && this->ml_ != nullptr && this->tailnet_name_.empty()) {
+    // Extract tailnet name from first peer's FQDN (e.g., "host.tail13ca7.ts.net" -> "tail13ca7.ts.net")
+    int count = microlink_get_peer_count(this->ml_);
+    for (int i = 0; i < count; i++) {
+      microlink_peer_info_t info;
+      if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK) {
+        std::string fqdn(info.hostname);
+        auto dot = fqdn.find('.');
+        if (dot != std::string::npos) {
+          this->tailnet_name_ = fqdn.substr(dot + 1);
+          break;
+        }
+      }
+    }
+  }
+  if (this->tailnet_name_sensor_ != nullptr && !this->tailnet_name_.empty()) {
+    if (force || this->tailnet_name_sensor_->state != this->tailnet_name_) {
+      this->tailnet_name_sensor_->publish_state(this->tailnet_name_);
+    }
+  }
   if (this->peer_list_sensor_ != nullptr && this->ml_ != nullptr) {
     int count = microlink_get_peer_count(this->ml_);
     // Compact format: "name(ip)D|name(ip)R|..." D=direct R=relay
@@ -319,6 +401,15 @@ void TailscaleComponent::publish_state_() {
   pub_sensor(this->peers_direct_sensor_, static_cast<float>(direct));
   pub_sensor(this->peers_derp_sensor_, static_cast<float>(derp));
   pub_sensor(this->peers_max_sensor_, static_cast<float>(this->max_peers_));
+  if (this->uptime_sensor_ != nullptr) {
+    float uptime_s = 0;
+    if (this->connected_since_ms_ > 0) {
+      uptime_s = static_cast<float>((millis() - this->connected_since_ms_) / 1000);
+    }
+    if (force || this->uptime_sensor_->state != uptime_s) {
+      this->uptime_sensor_->publish_state(uptime_s);
+    }
+  }
 #endif
 
 #ifdef USE_TEXT_SENSOR
@@ -336,6 +427,74 @@ void TailscaleComponent::publish_state_() {
     }
   }
 #endif
+}
+
+void TailscaleComponent::set_derp_enabled(bool enabled) {
+  ESP_LOGI(TAG, "DERP %s requested", enabled ? "enable" : "disable");
+  this->derp_rollback_value_ = this->enable_derp_;
+  this->enable_derp_ = enabled;
+  this->derp_rollback_pending_ = true;
+  this->derp_rollback_ms_ = millis();
+  // Apply immediately via reconnect
+  if (this->ml_ != nullptr) {
+    this->request_reconnect();
+  }
+}
+
+void TailscaleComponent::set_tailscale_enabled(bool enabled) {
+  ESP_LOGI(TAG, "Tailscale %s requested", enabled ? "enable" : "disable");
+  this->enable_rollback_value_ = this->tailscale_user_enabled_;
+  this->tailscale_user_enabled_ = enabled;
+  this->enable_rollback_pending_ = true;
+  this->enable_rollback_ms_ = millis();
+  if (!enabled && this->ml_ != nullptr) {
+    ESP_LOGI(TAG, "Stopping Tailscale...");
+    microlink_stop(this->ml_);
+    microlink_destroy(this->ml_);
+    this->ml_ = nullptr;
+    this->current_state_ = ML_STATE_IDLE;
+    this->state_changed_ = true;
+  } else if (enabled && this->ml_ == nullptr) {
+    ESP_LOGI(TAG, "Re-enabling Tailscale...");
+    // Will start in next loop() iteration
+  }
+}
+
+void TailscaleComponent::confirm_derp_rollback() {
+  if (this->derp_rollback_pending_) {
+    ESP_LOGI(TAG, "DERP change confirmed, rollback cancelled");
+    this->derp_rollback_pending_ = false;
+  }
+}
+
+void TailscaleComponent::confirm_enable_rollback() {
+  if (this->enable_rollback_pending_) {
+    ESP_LOGI(TAG, "Tailscale enable/disable change confirmed, rollback cancelled");
+    this->enable_rollback_pending_ = false;
+  }
+}
+
+void TailscaleComponent::request_reconnect() {
+  if (this->reconnect_phase_ != RECONNECT_IDLE) {
+    ESP_LOGW(TAG, "Reconnect already in progress (phase %d)", this->reconnect_phase_);
+    return;
+  }
+  if (this->ml_ == nullptr) {
+    ESP_LOGW(TAG, "Cannot reconnect: microlink not initialized");
+    return;
+  }
+  ESP_LOGI(TAG, "Reconnect requested: starting phase 1 (rebind)...");
+  this->reconnect_phase_ = RECONNECT_REBIND;
+  this->reconnect_start_ms_ = millis();
+  esp_err_t err = microlink_rebind(this->ml_);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Rebind call failed (%d), escalating to full restart...", err);
+    microlink_stop(this->ml_);
+    microlink_destroy(this->ml_);
+    this->ml_ = nullptr;
+    this->reconnect_phase_ = RECONNECT_FULL;
+    this->reconnect_start_ms_ = millis();
+  }
 }
 
 void TailscaleComponent::check_ip_config_(const char *vpn_ip) {

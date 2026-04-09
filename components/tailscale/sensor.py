@@ -20,6 +20,13 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("peers_direct", default={"name": "Tailscale Peers Direct"}): PEER_SCHEMA,
         cv.Optional("peers_derp", default={"name": "Tailscale Peers DERP"}): PEER_SCHEMA,
         cv.Optional("peers_max", default={"name": "Tailscale Peers Max"}): PEER_SCHEMA,
+        cv.Optional("uptime", default={"name": "Tailscale Uptime"}): sensor.sensor_schema(
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            device_class="duration",
+            unit_of_measurement="s",
+            entity_category="diagnostic",
+        ),
     }
 )
 
@@ -32,6 +39,7 @@ async def to_code(config):
         ("peers_direct", "set_peers_direct_sensor"),
         ("peers_derp", "set_peers_derp_sensor"),
         ("peers_max", "set_peers_max_sensor"),
+        ("uptime", "set_uptime_sensor"),
     ]:
         sens = await sensor.new_sensor(config[key])
         cg.add(getattr(parent, setter)(sens))
