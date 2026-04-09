@@ -51,6 +51,9 @@ async def to_code(config):
     cg.add(var.set_max_peers(config[CONF_MAX_PEERS]))
     cg.add(var.set_configured_ip(config[CONF_CONFIGURED_IP]))
 
+    # Sensors are auto-created via platform files (binary_sensor.py, text_sensor.py, sensor.py)
+    # User includes them via packages: github://Csontikka/esphome-tailscale/packages/tailscale/tailscale.yaml
+
     if config[CONF_LOGIN_SERVER]:
         cg.add(var.set_login_server(config[CONF_LOGIN_SERVER]))
 

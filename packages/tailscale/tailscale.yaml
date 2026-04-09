@@ -1,0 +1,39 @@
+external_components:
+  - source:
+      type: git
+      url: https://github.com/Csontikka/esphome-tailscale.git
+      ref: main
+    components: [tailscale]
+
+binary_sensor:
+  - platform: tailscale
+    connected:
+      name: "Tailscale Connected"
+
+text_sensor:
+  - platform: tailscale
+    ip_address:
+      name: "Tailscale IP"
+    tailscale_hostname:
+      name: "Tailscale Hostname"
+    memory_mode:
+      name: "Tailscale Memory"
+    setup_status:
+      name: "Tailscale Setup Status"
+    peer_status:
+      name: "Tailscale Peer Status"
+    magicdns:
+      name: "Tailscale MagicDNS"
+
+sensor:
+  - platform: tailscale
+    peers_total:
+      name: "Tailscale Peers Total"
+    peers_online:
+      name: "Tailscale Peers Online"
+    peers_direct:
+      name: "Tailscale Peers Direct"
+    peers_derp:
+      name: "Tailscale Peers DERP"
+    peers_max:
+      name: "Tailscale Peers Max"

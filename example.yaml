@@ -10,9 +10,20 @@ esp32:
 external_components:
   - source: components
 
+# For production use (not local dev):
+# packages:
+#   tailscale: github://Csontikka/esphome-tailscale/packages/tailscale/tailscale.yaml@main
+
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  hostname: "esp32-tailscale"
+  configured_ip: "init"  # Set to your Tailscale VPN IP after first boot
+  # max_peers: 16        # Optional, default 16
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  use_address: 100.105.79.114  # Set to Tailscale IP for ESPHome Builder
 
 logger:
   level: DEBUG
@@ -26,8 +37,11 @@ web_server:
 ota:
   platform: esphome
 
-tailscale:
-  auth_key: !secret tailscale_auth_key
-  hostname: "esp32-tailscale"
-  configured_ip: "init"  # Set to your Tailscale VPN IP after first boot
-  # max_peers: 16        # Optional, default 16
+binary_sensor:
+  - platform: tailscale
+
+text_sensor:
+  - platform: tailscale
+
+sensor:
+  - platform: tailscale
