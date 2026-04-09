@@ -407,7 +407,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		wireguardif_send_keepalive(device, peer);
 
 		// Set the IF-UP flag on netif
-		netif_set_link_up(device->netif);
+		LOCK_TCPIP_CORE(); netif_set_link_up(device->netif); UNLOCK_TCPIP_CORE();
 		printf("[WG] *** WIREGUARD SESSION ESTABLISHED wg_idx=%u ***\n", wg_idx);
 	} else {
 		// Packet bad
@@ -514,7 +514,7 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					}
 
 					// Make sure that link is reported as up
-					netif_set_link_up(device->netif);
+					LOCK_TCPIP_CORE(); netif_set_link_up(device->netif); UNLOCK_TCPIP_CORE();
 
 					printf("[WG_POST_DECRYPT] tot_len=%u dest_ok_will=%d\n", (unsigned)pbuf->tot_len, (IPH_V((struct ip_hdr *)pbuf->payload)==4)); fflush(stdout);
 				if (pbuf->tot_len > 0) {
@@ -1207,7 +1207,7 @@ static void wireguardif_tmr(void *arg) {
 
 	if (!link_up) {
 		// Clear the IF-UP flag on netif
-		netif_set_link_down(device->netif);
+		LOCK_TCPIP_CORE(); netif_set_link_down(device->netif); UNLOCK_TCPIP_CORE();
 	}
 }
 
@@ -1257,7 +1257,7 @@ void wireguardif_periodic(struct netif *netif) {
 		}
 	}
 	if (!link_up) {
-		netif_set_link_down(device->netif);
+		LOCK_TCPIP_CORE(); netif_set_link_down(device->netif); UNLOCK_TCPIP_CORE();
 	}
 }
 
