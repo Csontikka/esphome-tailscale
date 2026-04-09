@@ -27,8 +27,6 @@ text_sensor:
 
 sensor:
   - platform: tailscale
-    peers_total:
-      name: "Tailscale Peers Total"
     peers_online:
       name: "Tailscale Peers Online"
     peers_direct:
