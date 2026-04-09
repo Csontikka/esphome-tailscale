@@ -67,6 +67,9 @@ class TailscaleComponent : public PollingComponent {
   void set_peer_count_sensor(sensor::Sensor *sensor) {
     this->peer_count_sensor_ = sensor;
   }
+  void set_max_peers_sensor(sensor::Sensor *sensor) {
+    this->max_peers_sensor_ = sensor;
+  }
 #endif
 
   bool is_connected() const;
@@ -115,6 +118,7 @@ class TailscaleComponent : public PollingComponent {
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *peer_count_sensor_{nullptr};
+  sensor::Sensor *max_peers_sensor_{nullptr};
 #endif
 };
 

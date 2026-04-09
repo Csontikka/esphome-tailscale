@@ -34,3 +34,5 @@ sensor:
   - platform: tailscale
     peer_count:
       name: "Tailscale Peers"
+    max_peers:
+      name: "Tailscale Max Peers"
