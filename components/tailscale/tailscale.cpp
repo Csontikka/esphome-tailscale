@@ -187,7 +187,7 @@ void TailscaleComponent::publish_state_() {
     if (vpn_ip.empty()) {
       status = "Waiting for Tailscale...";
     } else if (this->configured_ip_ == "init" || this->configured_ip_.empty()) {
-      status = "Set var_tailscale_ip to: " + vpn_ip;
+      status = "Set tailscale_ip to: " + vpn_ip;
     } else if (this->configured_ip_ != vpn_ip) {
       status = "IP mismatch! Change " + this->configured_ip_ + " to " + vpn_ip;
     } else {
@@ -312,9 +312,9 @@ void TailscaleComponent::check_ip_config_(const char *vpn_ip) {
   this->vpn_ip_str_ = vpn_ip;
   this->ip_notify_pending_ = true;
   if (this->configured_ip_ == "init" || this->configured_ip_.empty()) {
-    ESP_LOGW(TAG, "Set var_tailscale_ip: \"%s\" in your ESPHome config (currently 'init')", vpn_ip);
+    ESP_LOGW(TAG, "Set tailscale_ip: \"%s\" in your ESPHome config (currently 'init')", vpn_ip);
   } else if (this->configured_ip_ != std::string(vpn_ip)) {
-    ESP_LOGW(TAG, "IP mismatch! Change var_tailscale_ip from \"%s\" to \"%s\"", this->configured_ip_.c_str(), vpn_ip);
+    ESP_LOGW(TAG, "IP mismatch! Change tailscale_ip from \"%s\" to \"%s\"", this->configured_ip_.c_str(), vpn_ip);
   }
 }
 
