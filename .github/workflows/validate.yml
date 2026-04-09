@@ -1,0 +1,65 @@
+name: Validate ESPHome config
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'components/**'
+      - 'packages/**'
+      - 'example.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'components/**'
+      - 'packages/**'
+      - 'example.yaml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Create dummy secrets
+        run: |
+          cat > secrets.yaml << 'EOF'
+          tailscale_auth_key: "tskey-auth-dummy-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+          wifi_ssid: "DummySSID"
+          wifi_password: "DummyPassword"
+          EOF
+
+      - name: Validate example.yaml
+        run: esphome config example.yaml
+
+      - name: Validate package YAML
+        run: |
+          # Create a minimal test config that uses the package
+          cat > /tmp/test-package.yaml << 'EOF'
+          esphome:
+            name: test-validate
+          esp32:
+            board: esp32-s3-devkitc-1
+            framework:
+              type: esp-idf
+          packages:
+            tailscale:
+              url: https://github.com/${{ github.repository }}
+              ref: ${{ github.sha }}
+              files: [packages/tailscale/tailscale.yaml]
+          tailscale:
+            auth_key: "tskey-auth-dummy-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+          wifi:
+            ssid: "DummySSID"
+            password: "DummyPassword"
+          logger:
+          api:
+          EOF
+          esphome config /tmp/test-package.yaml
