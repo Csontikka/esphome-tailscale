@@ -1,6 +1,10 @@
+substitutions:
+  var_tailscale_max_peers: "16"
+
 tailscale:
   auth_key: ${var_tailscale_auth_key}
   hostname: ${var_tailscale_hostname}
+  max_peers: ${var_tailscale_max_peers}
   update_interval: 30s
   configured_ip: ${var_tailscale_ip}
 
