@@ -59,8 +59,11 @@ async def to_code(config):
     ).replace("\\", "/")
 
     # Required ESP-IDF sdkconfig for Tailscale/WireGuard
-    # PSRAM: microlink needs large PSRAM buffers for HTTP/2 and JSON
+    # PSRAM: enable driver but don't crash if not present
     add_idf_sdkconfig_option("CONFIG_SPIRAM", True)
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_IGNORE_NOTFOUND", True)
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_MODE_OCT", True)
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_SPEED_80M", True)
     # lwIP: IP forwarding between WiFi and WG netif, IPv6 for STUN/DERP
     add_idf_sdkconfig_option("CONFIG_LWIP_IP_FORWARD", True)
     add_idf_sdkconfig_option("CONFIG_LWIP_IPV6", True)

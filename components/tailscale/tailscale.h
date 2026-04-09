@@ -48,6 +48,9 @@ class TailscaleComponent : public PollingComponent {
   void set_hostname_text_sensor(text_sensor::TextSensor *sensor) {
     this->hostname_sensor_ = sensor;
   }
+  void set_memory_mode_text_sensor(text_sensor::TextSensor *sensor) {
+    this->memory_mode_sensor_ = sensor;
+  }
 #endif
 #ifdef USE_SENSOR
   void set_peer_count_sensor(sensor::Sensor *sensor) {
@@ -80,6 +83,7 @@ class TailscaleComponent : public PollingComponent {
   microlink_t *ml_{nullptr};
   microlink_state_t current_state_{ML_STATE_IDLE};
   bool state_changed_{false};
+  bool psram_available_{false};
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
@@ -87,6 +91,7 @@ class TailscaleComponent : public PollingComponent {
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *ip_address_sensor_{nullptr};
   text_sensor::TextSensor *hostname_sensor_{nullptr};
+  text_sensor::TextSensor *memory_mode_sensor_{nullptr};
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *peer_count_sensor_{nullptr};

@@ -7,12 +7,15 @@ esp32:
   framework:
     type: esp-idf
 
-psram:
-  mode: octal
-  speed: 80MHz
-
 external_components:
   - source: components
+
+packages:
+  tailscale_config: !include
+    file: packages/tailscale/tailscale.yaml
+    vars:
+      var_tailscale_auth_key: !secret tailscale_auth_key
+      var_tailscale_hostname: "esp32-tailscale"
 
 wifi:
   ssid: !secret wifi_ssid
@@ -26,24 +29,3 @@ api:
 
 ota:
   platform: esphome
-
-tailscale:
-  auth_key: !secret tailscale_auth_key
-  hostname: "esp32-tailscale"
-
-binary_sensor:
-  - platform: tailscale
-    connected:
-      name: "Tailscale Connected"
-
-text_sensor:
-  - platform: tailscale
-    ip_address:
-      name: "Tailscale IP"
-    tailscale_hostname:
-      name: "Tailscale Hostname"
-
-sensor:
-  - platform: tailscale
-    peer_count:
-      name: "Tailscale Peers"

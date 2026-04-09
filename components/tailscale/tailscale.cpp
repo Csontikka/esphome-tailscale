@@ -2,6 +2,8 @@
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include "esphome/components/wifi/wifi_component.h"
+#include "esp_psram.h"
+#include "esp_heap_caps.h"
 
 namespace esphome {
 namespace tailscale {
@@ -10,6 +12,17 @@ static const char *const TAG = "tailscale";
 
 void TailscaleComponent::setup() {
   ESP_LOGI(TAG, "Initializing Tailscale (MicroLink)...");
+
+  // Runtime PSRAM detection
+  size_t psram_size = esp_psram_get_size();
+  if (psram_size > 0) {
+    this->psram_available_ = true;
+    ESP_LOGI(TAG, "PSRAM detected: %u KB - using large buffers", (unsigned)(psram_size / 1024));
+  } else {
+    this->psram_available_ = false;
+    ESP_LOGW(TAG, "No PSRAM - using small buffers (max ~30 peers). Add PSRAM for large tailnets.");
+  }
+
   ESP_LOGI(TAG, "Waiting for WiFi before starting...");
 }
 
@@ -153,6 +166,16 @@ void TailscaleComponent::publish_state_() {
   }
   if (this->hostname_sensor_ != nullptr && !this->hostname_.empty()) {
     this->hostname_sensor_->publish_state(this->hostname_);
+  }
+  if (this->memory_mode_sensor_ != nullptr) {
+    size_t psram = esp_psram_get_size();
+    if (psram > 0) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "PSRAM %uKB", (unsigned)(psram / 1024));
+      this->memory_mode_sensor_->publish_state(buf);
+    } else {
+      this->memory_mode_sensor_->publish_state("Internal RAM");
+    }
   }
 #endif
 
