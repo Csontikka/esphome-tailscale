@@ -53,6 +53,9 @@ class TailscaleComponent : public PollingComponent {
   void set_memory_mode_text_sensor(text_sensor::TextSensor *sensor) {
     this->memory_mode_sensor_ = sensor;
   }
+  void set_peer_status_text_sensor(text_sensor::TextSensor *sensor) {
+    this->peer_status_sensor_ = sensor;
+  }
   void set_setup_status_text_sensor(text_sensor::TextSensor *sensor) {
     this->setup_status_sensor_ = sensor;
   }
@@ -112,6 +115,7 @@ class TailscaleComponent : public PollingComponent {
   text_sensor::TextSensor *ip_address_sensor_{nullptr};
   text_sensor::TextSensor *hostname_sensor_{nullptr};
   text_sensor::TextSensor *memory_mode_sensor_{nullptr};
+  text_sensor::TextSensor *peer_status_sensor_{nullptr};
   text_sensor::TextSensor *setup_status_sensor_{nullptr};
   text_sensor::TextSensor *magicdns_sensor_{nullptr};
   text_sensor::TextSensor *peer_list_sensor_{nullptr};

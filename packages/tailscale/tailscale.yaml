@@ -27,12 +27,14 @@ text_sensor:
       name: "Tailscale Memory"
     setup_status:
       name: "Tailscale Setup Status"
+    peer_status:
+      name: "Tailscale Peer Status"
     magicdns:
       name: "Tailscale MagicDNS"
 
 sensor:
   - platform: tailscale
     peer_count:
-      name: "Tailscale Peers"
+      name: "Tailscale Peers Actual"
     max_peers:
-      name: "Tailscale Max Peers"
+      name: "Tailscale Peers Max"
