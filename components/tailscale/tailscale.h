@@ -103,6 +103,7 @@ class TailscaleComponent : public PollingComponent {
   bool psram_available_{false};
   bool ip_notify_pending_{false};
   bool force_publish_{true};
+  uint8_t hint_counter_{0};
   std::string vpn_ip_str_;
 
 #ifdef USE_BINARY_SENSOR

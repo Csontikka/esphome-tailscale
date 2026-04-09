@@ -19,7 +19,7 @@ text_sensor:
     memory_mode:
       name: "Tailscale Memory"
     setup_status:
-      name: "Tailscale Setup Status"
+      name: "Tailscale Setup Hint"
     peer_status:
       name: "Tailscale Peer Status"
     magicdns:
