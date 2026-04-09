@@ -24,6 +24,13 @@ wifi:
   password: !secret wifi_password
   # use_address: "100.x.x.x"  # Set to your Tailscale VPN IP after first boot
 
+time:
+  - platform: sntp
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+
 logger:
   level: DEBUG
   hardware_uart: UART0

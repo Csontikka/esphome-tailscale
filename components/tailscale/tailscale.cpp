@@ -112,7 +112,7 @@ void TailscaleComponent::update() {
                online, (int)this->max_peers_);
     }
     // Periodic status summary
-    ESP_LOGI(TAG, "Status: %s | peers %d/%d (direct=%d relay=%d) | free heap %uKB | PSRAM free %uKB | uptime %us",
+    ESP_LOGI(TAG, "Status: %s | peers %d/%d (direct=%d relay=%d) | heap %uKB | PSRAM %uKB | uptime %us",
              this->is_connected() ? "connected" : "disconnected",
              online, (int)this->max_peers_, direct, relay,
              (unsigned)(esp_get_free_heap_size() / 1024),

@@ -5,6 +5,14 @@ external_components:
       ref: main
     components: [tailscale]
 
+time:
+  - platform: sntp
+    id: tailscale_time
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+
 binary_sensor:
   - platform: tailscale
     connected:
