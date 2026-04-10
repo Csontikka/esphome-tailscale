@@ -1,0 +1,90 @@
+<svg width="1200" height="600" viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0f1e"/>
+      <stop offset="100%" style="stop-color:#0d1b2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffd700"/>
+      <stop offset="100%" style="stop-color:#b8860b"/>
+    </linearGradient>
+    <linearGradient id="tunnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00b4d8;stop-opacity:0.2"/>
+      <stop offset="50%" style="stop-color:#00b4d8;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#00b4d8;stop-opacity:0.2"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#00b4d8"/>
+    </marker>
+    <marker id="arrowDashed" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#daa520"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="600" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="600" y="50" font-family="'Segoe UI', Arial, sans-serif" font-size="26" font-weight="700" fill="#00b4d8" text-anchor="middle" letter-spacing="2">ARCHITECTURE · HORIZONTAL FLOW</text>
+  <line x1="400" y1="60" x2="800" y2="60" stroke="#00b4d8" stroke-width="1" opacity="0.4"/>
+
+  <!-- Tailscale Coordinator (top center) -->
+  <g transform="translate(600, 140)">
+    <path d="M -110 30 Q -130 30 -130 10 Q -130 -30 -90 -30 Q -80 -55 -40 -55 Q 10 -60 20 -30 Q 60 -30 60 0 Q 90 0 90 25 Q 90 45 60 45 L -100 45 Q -130 45 -110 30 Z"
+          fill="#0d4f7c" stroke="#2ea8d8" stroke-width="2"/>
+    <text x="0" y="-5" font-family="'Segoe UI', Arial, sans-serif" font-size="16" font-weight="700" fill="#00b4d8" text-anchor="middle">Tailscale</text>
+    <text x="0" y="15" font-family="'Segoe UI', Arial, sans-serif" font-size="13" font-weight="500" fill="#e0e0e0" text-anchor="middle">Coordinator (control plane)</text>
+    <text x="0" y="32" font-family="'Segoe UI', Arial, sans-serif" font-size="10" fill="#8aa9c4" text-anchor="middle">login.tailscale.com · key exchange only</text>
+  </g>
+
+  <!-- ESP32 (left) -->
+  <g transform="translate(180, 380)">
+    <rect x="-120" y="-90" width="240" height="180" rx="10" fill="#1a3a5c" stroke="#2ea8d8" stroke-width="2"/>
+    <text x="0" y="-62" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="700" fill="#00b4d8" text-anchor="middle">ESP32-S3</text>
+    <line x1="-100" y1="-48" x2="100" y2="-48" stroke="#2ea8d8" stroke-width="1" opacity="0.5"/>
+    <text x="0" y="-28" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">ESPHome · ESP-IDF</text>
+    <text x="0" y="-8" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">microlink (Tailscale)</text>
+    <text x="0" y="12" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">lwIP + WireGuard</text>
+    <text x="0" y="32" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">API · OTA · Web</text>
+    <line x1="-100" y1="48" x2="100" y2="48" stroke="#2ea8d8" stroke-width="1" opacity="0.5"/>
+    <text x="0" y="68" font-family="'Consolas', monospace" font-size="12" fill="url(#gold)" text-anchor="middle">100.64.x.y (tailnet IP)</text>
+  </g>
+
+  <!-- Home Assistant (right) -->
+  <g transform="translate(1020, 380)">
+    <rect x="-120" y="-90" width="240" height="180" rx="10" fill="#1a3a5c" stroke="#2ea8d8" stroke-width="2"/>
+    <text x="0" y="-62" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="700" fill="#00b4d8" text-anchor="middle">Home Assistant</text>
+    <line x1="-100" y1="-48" x2="100" y2="-48" stroke="#2ea8d8" stroke-width="1" opacity="0.5"/>
+    <text x="0" y="-28" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">HA OS / Core</text>
+    <text x="0" y="-8" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">Tailscale add-on</text>
+    <text x="0" y="12" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">ESPHome integration</text>
+    <text x="0" y="32" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">Dashboards</text>
+    <line x1="-100" y1="48" x2="100" y2="48" stroke="#2ea8d8" stroke-width="1" opacity="0.5"/>
+    <text x="0" y="68" font-family="'Consolas', monospace" font-size="12" fill="url(#gold)" text-anchor="middle">100.64.x.z (tailnet IP)</text>
+  </g>
+
+  <!-- Control plane arrows (HTTPS, dashed gold, to/from coordinator) -->
+  <path d="M 180 290 Q 280 200 490 160" fill="none" stroke="#daa520" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowDashed)"/>
+  <text x="280" y="230" font-family="'Segoe UI', Arial, sans-serif" font-size="11" fill="#daa520" text-anchor="middle" transform="rotate(-25 280 230)">HTTPS (register · key exchange)</text>
+
+  <path d="M 1020 290 Q 920 200 710 160" fill="none" stroke="#daa520" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowDashed)"/>
+  <text x="920" y="230" font-family="'Segoe UI', Arial, sans-serif" font-size="11" fill="#daa520" text-anchor="middle" transform="rotate(25 920 230)">HTTPS (register · key exchange)</text>
+
+  <!-- Direct WireGuard tunnel (bottom, horizontal, thick cyan) -->
+  <line x1="300" y1="500" x2="900" y2="500" stroke="url(#tunnelGrad)" stroke-width="8" stroke-linecap="round"/>
+  <line x1="300" y1="500" x2="900" y2="500" stroke="#00b4d8" stroke-width="2" stroke-dasharray="12,6"/>
+
+  <!-- Padlock in middle of tunnel -->
+  <g transform="translate(600, 500)">
+    <circle cx="0" cy="0" r="20" fill="#0a0f1e" stroke="#00b4d8" stroke-width="2"/>
+    <rect x="-7" y="-3" width="14" height="12" rx="1" fill="url(#gold)"/>
+    <path d="M -4 -3 Q -4 -11 0 -11 Q 4 -11 4 -3" fill="none" stroke="#ffd700" stroke-width="2"/>
+  </g>
+  <text x="600" y="470" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#00b4d8" text-anchor="middle">Direct WireGuard tunnel (end-to-end encrypted)</text>
+  <text x="600" y="540" font-family="'Segoe UI', Arial, sans-serif" font-size="11" fill="#8aa9c4" text-anchor="middle">Falls back to DERP relay if direct path fails · No subnet router, no port forward</text>
+
+  <!-- Connection from boxes to tunnel -->
+  <line x1="180" y1="470" x2="180" y2="500" stroke="#00b4d8" stroke-width="2"/>
+  <line x1="180" y1="500" x2="300" y2="500" stroke="#00b4d8" stroke-width="2" stroke-dasharray="12,6"/>
+  <line x1="1020" y1="470" x2="1020" y2="500" stroke="#00b4d8" stroke-width="2"/>
+  <line x1="900" y1="500" x2="1020" y2="500" stroke="#00b4d8" stroke-width="2" stroke-dasharray="12,6"/>
+</svg>

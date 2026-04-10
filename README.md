@@ -128,9 +128,42 @@ wifi_password: "YourWiFiPassword"
 tailscale_auth_key: "tskey-auth-xxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
-### 3. First flash (USB)
+### 3. First flash
 
-The first flash **must** be over USB — the device isn't on the tailnet yet, so OTA can't reach it.
+The device isn't on the tailnet yet, so OTA can't reach it. You need to get the firmware onto the device at least once before Tailscale can take over. Pick whichever method is least painful for you — they all produce the same result.
+
+#### Option A — ESPHome Web (recommended for most users)
+
+No CLI, no USB driver hunts, no Python install. Just a Chrome/Edge browser tab.
+
+1. In your ESPHome dashboard (or your local ESPHome install) **compile** the device YAML to produce a binary. From the HA ESPHome add-on this is the "Install → Manual download (modern format)" button.
+2. Plug the ESP32 into a computer via USB.
+3. Open [web.esphome.io](https://web.esphome.io/) in Chrome or Edge.
+4. Click **Connect**, pick the serial port, then **Install** → upload the `.bin` file from step 1.
+5. When it's done, click **Use device** → watch the live logs right in the browser.
+
+![ESPHome Web Flasher](docs/images/esphome-web-flasher.png)
+<!-- IMAGE: web.esphome.io page mid-upload, showing Connect / Install dialog. -->
+
+> **Why this is nice:** zero toolchain on your local machine, works on Windows/macOS/Linux/Chromebook identically, and the web flasher is maintained by the ESPHome team directly.
+
+#### Option B — Home Assistant ESPHome add-on (if your ESP is plugged into the HA host)
+
+If you're running the ESPHome add-on inside Home Assistant *and* the ESP32 is physically plugged into your HA machine, you can flash it straight from the HA UI with no separate tools:
+
+1. Open the **ESPHome dashboard** in HA (Settings → Add-ons → ESPHome → Open Web UI).
+2. Click **New device** → **Continue** → paste your YAML, or create from template.
+3. Click **Install** → **Plug into the computer running ESPHome Dashboard**.
+4. Pick the serial device (e.g. `/dev/ttyUSB0`) and hit **Install**.
+
+From the second flash onwards the dashboard switches automatically to OTA over the tailnet IP, so you don't need to keep the USB cable plugged in.
+
+![HA ESPHome Add-on Install](docs/images/ha-addon-install.png)
+<!-- IMAGE: HA ESPHome add-on "Install" dialog showing the three flash target options. -->
+
+#### Option C — USB with the ESPHome CLI (what I use for development)
+
+Classic, fully scriptable, and the fastest feedback loop if you're iterating on the YAML.
 
 ```bash
 esphome run your-device.yaml --device /dev/ttyUSB0
@@ -138,7 +171,9 @@ esphome run your-device.yaml --device /dev/ttyUSB0
 
 On Windows the device usually comes up as `COM3`, `COM4`, etc. Use `--device COM3` accordingly.
 
-Watch the serial log. You should see something like:
+#### What to look for on first boot
+
+Whichever method you picked, once the firmware is running connect to the serial log (web flasher, HA dashboard logs, or `esphome logs your-device.yaml`) and you should see:
 
 ```
 [I][tailscale]: Initializing Tailscale (MicroLink)...
