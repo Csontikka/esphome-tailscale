@@ -76,10 +76,13 @@ Boards currently verified:
 
 ### 1. Create a Tailscale auth key
 
-Log in to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and create a new auth key.
+Log in to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and go to **Settings → Personal Settings → Keys**. Click **Generate auth key...**.
+
+![Tailscale Keys Page](docs/images/tailscale-keys-page.png)
+
+Then fill in the dialog:
 
 ![Tailscale Auth Key Creation](docs/images/tailscale-auth-key-create.png)
-<!-- IMAGE: Tailscale admin console → Settings → Keys → Generate auth key... dialog. Show the checkboxes: Reusable, Ephemeral OFF, Pre-approved, Tags (optional). -->
 
 **Recommended settings:**
 
@@ -93,6 +96,21 @@ Log in to the [Tailscale admin console](https://login.tailscale.com/admin/settin
 | **Expiration** | 90 days *(max)* | Tailscale caps this — see **Disable key expiry** below to make the resulting node key permanent |
 
 Copy the key (starts with `tskey-auth-...`) — you'll paste it into your ESPHome secrets in a moment.
+
+> ### 🔑 Auth key vs. node key — important
+>
+> Tailscale has **two** different kinds of key, and they're easy to confuse:
+>
+> - **Auth key** (`tskey-auth-...`) — a *one-time ticket* that lets a new device register itself with your tailnet. The ESP only uses this on its very first boot, to prove to the control plane "I'm allowed to join". **After the first successful registration the auth key is no longer needed for normal operation** — the device has received its own private **node key** and talks to the tailnet with that from then on. Tailscale still shows the auth key in the admin console with a 90-day max expiry, but this does **not** kick the device off the tailnet when it expires — it only stops *new* devices from being able to register with the same key.
+> - **Node key** — the per-device long-term identity, generated and stored on the ESP itself (in NVS). This is the key that actually keeps the device authenticated on the tailnet. **This one *does* have its own expiry**, and by default Tailscale expires node keys after ~180 days, after which the device is kicked off the tailnet and needs to be re-authenticated (which means re-flashing or re-running the auth flow — ugly on an unattended sensor at a remote cabin).
+>
+> **What this means in practice:**
+>
+> 1. Generate an auth key, flash the ESP with it, let the device register.
+> 2. **Then go to the Tailscale admin → Machines → your ESP → ⋯ → "Disable key expiry".** This tells Tailscale "this specific device's *node* key never expires". Now the ESP stays on the tailnet forever, regardless of whether the original auth key expires.
+> 3. After that, the auth key is basically discardable — if it expires, nothing happens to the already-registered device. You only need a new auth key if you want to flash *another* ESP, or re-register this one from scratch (e.g. after `esptool erase_flash`).
+>
+> If you skip step 2, everything will *look* fine for months, and then one day the device silently drops off the tailnet and you'll have no idea why. **Disable node key expiry. Always. For every ESP you flash.**
 
 ### 2. Install the component
 
@@ -124,6 +142,12 @@ logger:
 
 api:
 
+# Optional — only for the initial bring-up test.
+# web_server exposes a tiny HTTP page at http://<device-ip>/ that shows
+# the live state of all entities. Handy to verify "yes, Tailscale is up
+# and I can reach the device over its 100.x.y.z address from my browser".
+# Once Home Assistant is connected over the API, you don't need this —
+# feel free to remove the block, it just uses flash and RAM for nothing.
 web_server:
   port: 80
 
@@ -169,9 +193,6 @@ If you're running the ESPHome add-on inside Home Assistant *and* the ESP32 is ph
 
 From the second flash onwards the dashboard switches automatically to OTA over the tailnet IP, so you don't need to keep the USB cable plugged in.
 
-![HA ESPHome Add-on Install](docs/images/ha-addon-install.png)
-<!-- IMAGE: HA ESPHome add-on "Install" dialog showing the three flash target options. -->
-
 #### Option C — USB with the ESPHome CLI (what I use for development)
 
 Classic, fully scriptable, and the fastest feedback loop if you're iterating on the YAML.
@@ -198,9 +219,6 @@ Whichever method you picked, once the firmware is running connect to the serial 
 [I][tailscale]: Connected! VPN IP: 100.xx.yy.zz
 [I][tailscale]: Set wifi use_address: "100.xx.yy.zz" in your ESPHome YAML
 ```
-
-![Serial Log First Boot](docs/images/serial-log-first-boot.png)
-<!-- IMAGE: A screenshot or nicely-formatted terminal screen showing the first-boot sequence above. -->
 
 ### 4. Pin `use_address` to the Tailscale IP
 
