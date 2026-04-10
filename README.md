@@ -363,9 +363,6 @@ The ESP32 runs [microlink](https://github.com/CamM2325/microlink), a C implement
 
 This ESPHome component wraps microlink in a `PollingComponent`, feeds it your auth key, exposes the state it reports as Home Assistant entities, and integrates the lifecycle with the rest of ESPHome (WiFi wait, OTA hooks, reboot, etc.).
 
-![How It Works Flow](docs/images/how-it-works.png)
-<!-- IMAGE: Sequence-style diagram: WiFi connect → microlink_init → HTTPS to control plane → node registration → WireGuard handshake with DERP → disco probes → direct paths where possible → CONNECTED state. Highlight that Tailscale's control plane never sees traffic, only metadata. -->
-
 ### Direct vs DERP
 
 Tailscale tries to make every peer-to-peer connection a **direct** UDP path. When that fails (strict NAT, UDP-blocked networks, etc.) it falls back to **DERP**: relays operated by Tailscale that tunnel traffic for you. DERP is encrypted end-to-end — the relays only see ciphertext — but they add latency.
