@@ -7,12 +7,11 @@ esp32:
   framework:
     type: esp-idf
 
-external_components:
-  - source: components
-
-# For production use (not local dev):
-# packages:
-#   tailscale: github://Csontikka/esphome-tailscale/packages/tailscale/tailscale.yaml@main
+# Pull the tailscale component + all entities from the GitHub package.
+# This is exactly what an end user would do — guarantees the build output
+# matches what users get when they include the package.
+packages:
+  tailscale: github://Csontikka/esphome-tailscale/packages/tailscale/tailscale.yaml@main
 
 tailscale:
   auth_key: !secret tailscale_auth_key
@@ -23,13 +22,6 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   # use_address: "100.x.x.x"  # Set to your Tailscale VPN IP after first boot
-
-time:
-  - platform: sntp
-    servers:
-      - 0.pool.ntp.org
-      - 1.pool.ntp.org
-      - 2.pool.ntp.org
 
 logger:
   level: DEBUG
@@ -42,20 +34,3 @@ web_server:
 
 ota:
   platform: esphome
-
-binary_sensor:
-  - platform: tailscale
-
-text_sensor:
-  - platform: tailscale
-
-sensor:
-  - platform: tailscale
-
-button:
-  - platform: tailscale
-  - platform: restart
-    name: "Reboot"
-
-switch:
-  - platform: tailscale
