@@ -677,6 +677,7 @@ esphome-tailscale/
 ├── microlink/                 # Vendored copy of the Tailscale protocol implementation
 ├── example.yaml               # End-user reference config that uses the GitHub package
 ├── example-dev.yaml           # Development config using the local checkout and inline entities
+├── CHANGELOG.md               # Release notes and breaking-change log (Keep a Changelog format)
 ├── SECURITY.md                # Security policy and vulnerability reporting
 ├── LICENSE                    # MIT License
 ├── .gitignore                 # Git ignore rules
