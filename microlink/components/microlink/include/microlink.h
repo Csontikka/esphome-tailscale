@@ -168,6 +168,20 @@ int microlink_get_peer_count(const microlink_t *ml);
 esp_err_t microlink_get_peer_info(const microlink_t *ml, int index, microlink_peer_info_t *info);
 
 /**
+ * @brief Get auth key / node key expiry time (Unix epoch seconds)
+ * @param ml Handle
+ * @return Expiry timestamp (Unix seconds), or 0 if unknown / no expiry set
+ */
+int64_t microlink_get_key_expiry(const microlink_t *ml);
+
+/**
+ * @brief Check if auth key / node key is expired
+ * @param ml Handle
+ * @return true if control plane reported Node.Expired == true
+ */
+bool microlink_is_key_expired(const microlink_t *ml);
+
+/**
  * @brief Send UDP data to a peer by VPN IP
  * @param ml Handle
  * @param dest_vpn_ip Destination VPN IP (host byte order)

@@ -4,6 +4,7 @@
 #include "esphome/components/wifi/wifi_component.h"
 #include "esp_psram.h"
 #include "esp_heap_caps.h"
+#include <ctime>
 
 namespace esphome {
 namespace tailscale {
@@ -314,8 +315,34 @@ void TailscaleComponent::publish_state_() {
       }
     }
   }
-  if (this->auth_key_status_sensor_ != nullptr) {
-    std::string key_status = connected ? "Active" : "Unknown";
+  if (this->auth_key_status_sensor_ != nullptr && this->ml_ != nullptr) {
+    std::string key_status;
+    int64_t expiry = microlink_get_key_expiry(this->ml_);
+    bool expired = microlink_is_key_expired(this->ml_);
+    if (expired) {
+      key_status = "Expired";
+    } else if (expiry == 0) {
+      key_status = connected ? "No expiry" : "Unknown";
+    } else {
+      // Compute days until expiry
+      time_t now = ::time(nullptr);
+      int64_t remaining = expiry - (int64_t)now;
+      if (remaining <= 0) {
+        key_status = "Expired";
+      } else {
+        int days = (int)(remaining / 86400);
+        int hours = (int)((remaining % 86400) / 3600);
+        char buf[48];
+        // Format: "OK (42d 3h left)" or "WARN (2d left)"
+        const char *prefix = (days < 7) ? "WARN" : "OK";
+        if (days > 0) {
+          snprintf(buf, sizeof(buf), "%s (%dd %dh left)", prefix, days, hours);
+        } else {
+          snprintf(buf, sizeof(buf), "WARN (%dh left)", hours);
+        }
+        key_status = buf;
+      }
+    }
     if (force || this->auth_key_status_sensor_->state != key_status) {
       this->auth_key_status_sensor_->publish_state(key_status);
     }

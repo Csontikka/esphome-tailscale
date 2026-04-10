@@ -610,6 +610,14 @@ esp_err_t microlink_get_peer_info(const microlink_t *ml, int index, microlink_pe
     return ESP_OK;
 }
 
+int64_t microlink_get_key_expiry(const microlink_t *ml) {
+    return ml ? ml->key_expiry_epoch : 0;
+}
+
+bool microlink_is_key_expired(const microlink_t *ml) {
+    return ml ? ml->key_expired : false;
+}
+
 /* ============================================================================
  * Send API
  * ========================================================================== */
