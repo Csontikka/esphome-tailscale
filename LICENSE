@@ -1,0 +1,62 @@
+MIT License
+
+Copyright (c) 2026 Csontikka
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+This project bundles / depends on the following third-party software, each
+under its own license. Their copyrights and license terms are preserved.
+
+## microlink (git submodule: microlink/)
+Copyright (c) 2025-2026 Cameron Malone — MIT License.
+Source: https://github.com/CamM2325/microlink
+Full text: see `microlink/LICENSE`.
+microlink is an independent, clean-room implementation of the Tailscale
+protocol and is not affiliated with or endorsed by Tailscale Inc.
+
+## WireGuard
+WireGuard is a registered trademark of Jason A. Donenfeld.
+The WireGuard protocol implementation inside microlink is based on the
+public WireGuard specification. This project is not affiliated with or
+endorsed by Jason A. Donenfeld or the WireGuard project.
+
+## X25519
+The X25519 elliptic curve implementation inside microlink is derived from
+public-domain code by Daniel J. Bernstein. See `microlink/x25519-license.txt`.
+
+## Tailscale
+"Tailscale" is a trademark of Tailscale Inc. This project uses the name
+"Tailscale" only to describe interoperability with the Tailscale service /
+protocol. **This project is not affiliated with, sponsored by, or endorsed
+by Tailscale Inc.** No Tailscale source code is included or copied.
+
+## ESPHome
+This project is an external component for ESPHome (https://esphome.io/),
+which is licensed under the GPLv3 / MIT mix documented in the ESPHome
+repository. This component does not modify or redistribute ESPHome itself;
+it is loaded at build time via the `external_components` mechanism.
+
+---
+
+DISCLAIMER: This project is an independent community effort created for
+educational and interoperability purposes. The authors make no guarantees
+about security, correctness, stability, or compatibility with official
+Tailscale software. Use at your own risk.

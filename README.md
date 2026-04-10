@@ -597,14 +597,34 @@ Yes. Once connected, it responds to ICMP on its `100.x` address like any other T
 
 ## Credits
 
-- **[microlink](https://github.com/CamM2325/microlink)** by @CamM2325 — the actual Tailscale/WireGuard implementation that makes this possible.
+This component is **just the glue** between ESPHome and a third-party Tailscale protocol stack. All the hard work on the wire protocol, WireGuard crypto, disco/STUN, and DERP is done by upstream projects:
+
+- **[microlink](https://github.com/CamM2325/microlink)** by **Cameron Malone** ([@CamM2325](https://github.com/CamM2325)) — MIT-licensed, clean-room implementation of the Tailscale protocol for embedded devices. This is the library that actually speaks Tailscale. Included here as a git submodule under `microlink/`.
+- **[WireGuard](https://www.wireguard.com/)** — the underlying VPN protocol, designed by **Jason A. Donenfeld**. "WireGuard" is a registered trademark of Jason A. Donenfeld.
+- **X25519** — elliptic curve code derived from public-domain work by **Daniel J. Bernstein**.
 - **[ESPHome](https://esphome.io/)** — the framework this plugs into.
-- **[Tailscale](https://tailscale.com/)** — the WireGuard mesh we're joining.
+- **[Tailscale](https://tailscale.com/)** — the mesh network we're joining as a peer.
+
+### Trademark & non-affiliation notice
+
+> **This project is not affiliated with, sponsored by, or endorsed by Tailscale Inc., Jason A. Donenfeld, or the WireGuard project.**
+>
+> "Tailscale" is a trademark of Tailscale Inc. "WireGuard" is a registered trademark of Jason A. Donenfeld. Both names are used here only to describe interoperability with the respective services and protocols. No Tailscale source code is included, copied, or redistributed in this repository — the protocol layer is provided by the separate, independently-maintained microlink library.
 
 ---
 
 ## License
 
-This project is released under the MIT License. See `LICENSE` for details.
+This project (the ESPHome wrapper — everything under `components/`, `packages/`, `example.yaml`, `README.md`, etc.) is released under the **MIT License**. See [`LICENSE`](LICENSE) for the full text and the list of third-party notices.
 
-microlink is included as a git submodule under its own license — see `microlink/LICENSE`.
+Bundled / required components keep their own licenses:
+
+| Component | License | Copyright |
+|-----------|---------|-----------|
+| [microlink](https://github.com/CamM2325/microlink) (git submodule) | MIT | © 2025-2026 Cameron Malone |
+| WireGuard protocol impl (inside microlink) | MIT (based on public spec) | WireGuard™ — Jason A. Donenfeld |
+| X25519 (inside microlink) | Public domain | Daniel J. Bernstein |
+
+See [`microlink/LICENSE`](microlink/LICENSE) and [`microlink/x25519-license.txt`](microlink/x25519-license.txt) for the full upstream texts.
+
+**DISCLAIMER:** This is an independent community effort for educational and interoperability purposes. The authors make no guarantees about security, correctness, stability, or compatibility with official Tailscale software. **Use at your own risk.**
