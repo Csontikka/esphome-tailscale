@@ -23,8 +23,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("magicdns", default={"name": "Tailscale MagicDNS"}): TS_SCHEMA,
         cv.Optional("peer_list"): TS_SCHEMA,
         cv.Optional("tailnet_name", default={"name": "Tailscale Tailnet"}): TS_SCHEMA,
-        cv.Optional("auth_key_status", default={"name": "Tailscale Auth Key Status"}): TS_SCHEMA,
-        cv.Optional("auth_key_expiry", default={"name": "Tailscale Auth Key Expiry"}): TS_TIMESTAMP_SCHEMA,
+        cv.Optional("key_expiry", default={"name": "Tailscale Key Expiry"}): TS_TIMESTAMP_SCHEMA,
         cv.Optional("ha_connection_route", default={"name": "HA Connection Route"}): TS_SCHEMA,
         cv.Optional("ha_connection_ip", default={"name": "HA Connection IP"}): TS_SCHEMA,
     }
@@ -43,8 +42,7 @@ async def to_code(config):
         ("magicdns", "set_magicdns_text_sensor"),
         ("peer_list", "set_peer_list_text_sensor"),
         ("tailnet_name", "set_tailnet_name_text_sensor"),
-        ("auth_key_status", "set_auth_key_status_text_sensor"),
-        ("auth_key_expiry", "set_auth_key_expiry_text_sensor"),
+        ("key_expiry", "set_key_expiry_text_sensor"),
         ("ha_connection_route", "set_ha_connection_route_text_sensor"),
         ("ha_connection_ip", "set_ha_connection_ip_text_sensor"),
     ]:

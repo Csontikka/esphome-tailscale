@@ -38,14 +38,15 @@ class TailscaleComponent : public PollingComponent {
   // Setters called from codegen
   void set_auth_key(const std::string &key) { this->auth_key_ = key; }
   void set_hostname(const std::string &hostname) { this->hostname_ = hostname; }
-  void set_enable_stun(bool enable) { this->enable_stun_ = enable; }
-  void set_enable_disco(bool enable) { this->enable_disco_ = enable; }
   void set_max_peers(uint8_t max) { this->max_peers_ = max; }
   void set_login_server(const std::string &server) { this->login_server_ = server; }
 
 #ifdef USE_BINARY_SENSOR
   void set_connected_binary_sensor(binary_sensor::BinarySensor *sensor) {
     this->connected_sensor_ = sensor;
+  }
+  void set_key_expiry_warning_binary_sensor(binary_sensor::BinarySensor *sensor) {
+    this->key_expiry_warning_sensor_ = sensor;
   }
 #endif
 #ifdef USE_TEXT_SENSOR
@@ -73,11 +74,8 @@ class TailscaleComponent : public PollingComponent {
   void set_tailnet_name_text_sensor(text_sensor::TextSensor *sensor) {
     this->tailnet_name_sensor_ = sensor;
   }
-  void set_auth_key_status_text_sensor(text_sensor::TextSensor *sensor) {
-    this->auth_key_status_sensor_ = sensor;
-  }
-  void set_auth_key_expiry_text_sensor(text_sensor::TextSensor *sensor) {
-    this->auth_key_expiry_sensor_ = sensor;
+  void set_key_expiry_text_sensor(text_sensor::TextSensor *sensor) {
+    this->key_expiry_sensor_ = sensor;
   }
   void set_ha_connection_route_text_sensor(text_sensor::TextSensor *sensor) {
     this->ha_route_sensor_ = sensor;
@@ -119,8 +117,6 @@ class TailscaleComponent : public PollingComponent {
   // Config
   std::string auth_key_;
   std::string hostname_;
-  bool enable_stun_{true};
-  bool enable_disco_{true};
   uint8_t max_peers_{16};
   std::string login_server_;
 
@@ -149,6 +145,7 @@ class TailscaleComponent : public PollingComponent {
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
+  binary_sensor::BinarySensor *key_expiry_warning_sensor_{nullptr};
 #endif
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *ip_address_sensor_{nullptr};
@@ -159,8 +156,7 @@ class TailscaleComponent : public PollingComponent {
   text_sensor::TextSensor *magicdns_sensor_{nullptr};
   text_sensor::TextSensor *peer_list_sensor_{nullptr};
   text_sensor::TextSensor *tailnet_name_sensor_{nullptr};
-  text_sensor::TextSensor *auth_key_status_sensor_{nullptr};
-  text_sensor::TextSensor *auth_key_expiry_sensor_{nullptr};
+  text_sensor::TextSensor *key_expiry_sensor_{nullptr};
   text_sensor::TextSensor *ha_route_sensor_{nullptr};
   text_sensor::TextSensor *ha_ip_sensor_{nullptr};
 #endif

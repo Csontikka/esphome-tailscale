@@ -17,6 +17,8 @@ binary_sensor:
   - platform: tailscale
     connected:
       name: "Tailscale Connected"
+    key_expiry_warning:
+      name: "Tailscale Key Expiry Warning"
 
 text_sensor:
   - platform: tailscale
@@ -34,10 +36,8 @@ text_sensor:
       name: "Tailscale MagicDNS"
     tailnet_name:
       name: "Tailscale Tailnet"
-    auth_key_status:
-      name: "Tailscale Auth Key Status"
-    auth_key_expiry:
-      name: "Tailscale Auth Key Expiry"
+    key_expiry:
+      name: "Tailscale Key Expiry"
     ha_connection_route:
       name: "HA Connection Route"
 

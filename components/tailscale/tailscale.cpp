@@ -40,8 +40,6 @@ void TailscaleComponent::start_microlink_() {
   microlink_config_t config = {};
   config.auth_key = this->auth_key_.c_str();
   config.device_name = this->hostname_.empty() ? nullptr : this->hostname_.c_str();
-  config.enable_stun = this->enable_stun_;
-  config.enable_disco = this->enable_disco_;
   config.max_peers = this->max_peers_;
 
   ESP_LOGI(TAG, "Calling microlink_init with auth_key=%s device=%s",
@@ -193,8 +191,6 @@ void TailscaleComponent::update() {
 void TailscaleComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "Tailscale:");
   ESP_LOGCONFIG(TAG, "  Hostname: %s", this->hostname_.empty() ? "(auto)" : this->hostname_.c_str());
-  ESP_LOGCONFIG(TAG, "  STUN: %s", YESNO(this->enable_stun_));
-  ESP_LOGCONFIG(TAG, "  DISCO: %s", YESNO(this->enable_disco_));
   ESP_LOGCONFIG(TAG, "  Max Peers: %u", this->max_peers_);
   if (!this->login_server_.empty()) {
     ESP_LOGCONFIG(TAG, "  Login Server: %s", this->login_server_.c_str());
@@ -328,44 +324,46 @@ void TailscaleComponent::publish_state_() {
       }
     }
   }
-  if ((this->auth_key_status_sensor_ != nullptr || this->auth_key_expiry_sensor_ != nullptr) &&
+  if ((this->key_expiry_sensor_ != nullptr ||
+#ifdef USE_BINARY_SENSOR
+       this->key_expiry_warning_sensor_ != nullptr ||
+#endif
+       false) &&
       this->ml_ != nullptr) {
-    std::string key_status;
-    std::string key_expiry_iso;  // ISO 8601 UTC, or empty for unknown
+    // The "key expiry" we get from microlink is the NODE key expiry, parsed from
+    // the Tailscale control plane's MapResponse.KeyExpiry field. When the user
+    // clicks "Disable key expiry" in the Tailscale admin, the control plane sends
+    // "0001-01-01T00:00:00Z" (Go's zero time), which the microlink parser turns
+    // into a near-zero epoch. We treat anything below a sane baseline as "disabled".
+    constexpr int64_t SANE_EPOCH_BASELINE = 1577836800;  // 2020-01-01 UTC
     int64_t expiry = microlink_get_key_expiry(this->ml_);
-    bool expired = microlink_is_key_expired(this->ml_);
-    if (expired) {
-      key_status = "Expired";
-      key_expiry_iso = "";  // unknown/none for timestamp sensor
-    } else if (expiry == 0) {
-      key_status = connected ? "OK" : "Unknown";
-      key_expiry_iso = "";
-    } else {
-      time_t now = ::time(nullptr);
-      int64_t remaining = expiry - (int64_t)now;
-      if (remaining <= 0) {
-        key_status = "Expired";
-        key_expiry_iso = "";
-      } else {
-        int days = (int)(remaining / 86400);
-        // Status: simple word — <7 days = Warning
-        key_status = (days < 7) ? "Warning" : "OK";
-        // Expiry: ISO 8601 UTC timestamp for HA timestamp device_class
-        struct tm tm_exp;
-        time_t exp_t = (time_t)expiry;
-        gmtime_r(&exp_t, &tm_exp);
-        char iso_buf[32];
-        strftime(iso_buf, sizeof(iso_buf), "%Y-%m-%dT%H:%M:%S+00:00", &tm_exp);
-        key_expiry_iso = iso_buf;
-      }
+    bool expiry_enabled = (expiry > SANE_EPOCH_BASELINE);
+
+    // Binary sensor: problem = expiry is enabled (device will eventually drop
+    // off the tailnet). OFF = expiry disabled (the recommended safe state).
+    bool key_problem = expiry_enabled;
+#ifdef USE_BINARY_SENSOR
+    if (this->key_expiry_warning_sensor_ != nullptr &&
+        (force || this->key_expiry_warning_sensor_->state != key_problem)) {
+      this->key_expiry_warning_sensor_->publish_state(key_problem);
     }
-    if (this->auth_key_status_sensor_ != nullptr &&
-        (force || this->auth_key_status_sensor_->state != key_status)) {
-      this->auth_key_status_sensor_->publish_state(key_status);
+#endif
+
+    // Text sensor (timestamp device class): ISO 8601 UTC when enabled, empty
+    // string when disabled (so HA renders "unknown" which is the correct state
+    // for a timestamp that doesn't exist).
+    std::string key_expiry_iso;
+    if (expiry_enabled) {
+      struct tm tm_exp;
+      time_t exp_t = (time_t)expiry;
+      gmtime_r(&exp_t, &tm_exp);
+      char iso_buf[32];
+      strftime(iso_buf, sizeof(iso_buf), "%Y-%m-%dT%H:%M:%S+00:00", &tm_exp);
+      key_expiry_iso = iso_buf;
     }
-    if (this->auth_key_expiry_sensor_ != nullptr &&
-        (force || this->auth_key_expiry_sensor_->state != key_expiry_iso)) {
-      this->auth_key_expiry_sensor_->publish_state(key_expiry_iso);
+    if (this->key_expiry_sensor_ != nullptr &&
+        (force || this->key_expiry_sensor_->state != key_expiry_iso)) {
+      this->key_expiry_sensor_->publish_state(key_expiry_iso);
     }
   }
   if (this->ha_route_sensor_ != nullptr || this->ha_ip_sensor_ != nullptr) {
