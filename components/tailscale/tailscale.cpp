@@ -2,6 +2,9 @@
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include "esphome/components/wifi/wifi_component.h"
+#ifdef USE_API
+#include "esphome/components/api/api_server.h"
+#endif
 #include "esp_psram.h"
 #include "esp_heap_caps.h"
 #include <ctime>
@@ -69,17 +72,48 @@ void TailscaleComponent::loop() {
     this->start_microlink_();
   }
 
-  // 60s rollback timers for switches
+  // Auto-confirm rollback after 30s if HA API is still connected (proof HA can see us)
+  bool api_alive = false;
+#ifdef USE_API
+  api_alive = api::global_api_server != nullptr && api::global_api_server->is_connected();
+#endif
+  if (this->derp_rollback_pending_ && api_alive && (millis() - this->derp_rollback_ms_ > 30000)) {
+    ESP_LOGI(TAG, "DERP change auto-confirmed (HA API still alive after 30s)");
+    this->derp_rollback_pending_ = false;
+  }
+  if (this->enable_rollback_pending_ && api_alive && (millis() - this->enable_rollback_ms_ > 30000)) {
+    ESP_LOGI(TAG, "Tailscale enable change auto-confirmed (HA API still alive after 30s)");
+    this->enable_rollback_pending_ = false;
+  }
+
+  // 60s rollback timers for switches (HA unreachable = restore)
   if (this->derp_rollback_pending_ && (millis() - this->derp_rollback_ms_ > 60000)) {
     ESP_LOGW(TAG, "DERP rollback: no confirmation in 60s, restoring previous state");
     this->enable_derp_ = this->derp_rollback_value_;
     this->derp_rollback_pending_ = false;
-    if (this->ml_ != nullptr) this->request_reconnect();
+#ifdef USE_SWITCH
+    if (this->derp_switch_ != nullptr) {
+      this->derp_switch_->publish_state(this->derp_rollback_value_);
+    }
+#endif
+    // Full restart to apply config
+    if (this->ml_ != nullptr) {
+      microlink_stop(this->ml_);
+      microlink_destroy(this->ml_);
+      this->ml_ = nullptr;
+      this->current_state_ = ML_STATE_IDLE;
+      this->state_changed_ = true;
+    }
   }
   if (this->enable_rollback_pending_ && (millis() - this->enable_rollback_ms_ > 60000)) {
     ESP_LOGW(TAG, "Enable rollback: no confirmation in 60s, restoring previous state");
     this->tailscale_user_enabled_ = this->enable_rollback_value_;
     this->enable_rollback_pending_ = false;
+#ifdef USE_SWITCH
+    if (this->enable_switch_ != nullptr) {
+      this->enable_switch_->publish_state(this->enable_rollback_value_);
+    }
+#endif
     if (!this->tailscale_user_enabled_ && this->ml_ != nullptr) {
       microlink_stop(this->ml_);
       microlink_destroy(this->ml_);
@@ -457,14 +491,19 @@ void TailscaleComponent::publish_state_() {
 }
 
 void TailscaleComponent::set_derp_enabled(bool enabled) {
-  ESP_LOGI(TAG, "DERP %s requested", enabled ? "enable" : "disable");
+  ESP_LOGI(TAG, "DERP %s requested - forcing full microlink restart", enabled ? "enable" : "disable");
   this->derp_rollback_value_ = this->enable_derp_;
   this->enable_derp_ = enabled;
   this->derp_rollback_pending_ = true;
   this->derp_rollback_ms_ = millis();
-  // Apply immediately via reconnect
+  // Config change requires full stop/destroy/re-init (rebind doesn't re-read config)
   if (this->ml_ != nullptr) {
-    this->request_reconnect();
+    microlink_stop(this->ml_);
+    microlink_destroy(this->ml_);
+    this->ml_ = nullptr;
+    this->current_state_ = ML_STATE_IDLE;
+    this->state_changed_ = true;
+    // Next loop() iteration will re-init with new config
   }
 }
 

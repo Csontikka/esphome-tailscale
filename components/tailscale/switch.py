@@ -40,4 +40,5 @@ async def to_code(config):
     ]:
         sw = await switch.new_switch(config[key])
         await cg.register_component(sw, {})
-        cg.add(getattr(sw, "set_parent")(parent))
+        cg.add(sw.set_parent(parent))
+        cg.add(getattr(parent, setter)(sw))

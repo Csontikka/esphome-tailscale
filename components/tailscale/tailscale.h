@@ -78,6 +78,10 @@ class TailscaleComponent : public PollingComponent {
     this->auth_key_status_sensor_ = sensor;
   }
 #endif
+#ifdef USE_SWITCH
+  void set_derp_switch(switch_::Switch *sw) { this->derp_switch_ = sw; }
+  void set_enable_switch(switch_::Switch *sw) { this->enable_switch_ = sw; }
+#endif
 #ifdef USE_SENSOR
   void set_peers_total_sensor(sensor::Sensor *sensor) { this->peers_total_sensor_ = sensor; }
   void set_peers_online_sensor(sensor::Sensor *sensor) { this->peers_online_sensor_ = sensor; }
@@ -162,6 +166,10 @@ class TailscaleComponent : public PollingComponent {
   sensor::Sensor *peers_derp_sensor_{nullptr};
   sensor::Sensor *peers_max_sensor_{nullptr};
   sensor::Sensor *uptime_sensor_{nullptr};
+#endif
+#ifdef USE_SWITCH
+  switch_::Switch *derp_switch_{nullptr};
+  switch_::Switch *enable_switch_{nullptr};
 #endif
 };
 
