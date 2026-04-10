@@ -631,8 +631,9 @@ If you want to modify the component:
 ```bash
 git clone https://github.com/Csontikka/esphome-tailscale.git
 cd esphome-tailscale
-git submodule update --init --recursive
 ```
+
+The `microlink/` directory is vendored directly into the repository, so no `git submodule` step is needed.
 
 Then point an ESPHome YAML at your local checkout instead of the package:
 
@@ -649,7 +650,7 @@ Build and flash:
 esphome run example.yaml --device COM3
 ```
 
-The `components/tailscale/` directory is the external component proper; `microlink/` is a git submodule pointing at [CamM2325/microlink](https://github.com/CamM2325/microlink) which provides the Tailscale protocol stack.
+The `components/tailscale/` directory is the external component proper; `microlink/` is a vendored copy of [CamM2325/microlink](https://github.com/CamM2325/microlink) (via the [Csontikka/microlink](https://github.com/Csontikka/microlink) fork) which provides the Tailscale protocol stack. It is checked in directly rather than pulled as a submodule, so a fresh clone is ready to build with no extra steps.
 
 ### File layout
 
@@ -671,7 +672,7 @@ esphome-tailscale/
 ├── .github/
 │   ├── workflows/
 │   │   ├── validate.yml               # ESPHome config validation CI
-│   │   ├── check-microlink-update.yml # Alerts when the microlink submodule has a new upstream release
+│   │   ├── check-microlink-update.yml # Alerts when the vendored microlink has a new upstream release
 │   │   ├── codeql.yml                 # GitHub CodeQL static analysis
 │   │   └── sonarcloud.yml             # SonarCloud code quality scan
 │   └── dependabot.yml                 # Automated dependency update config
@@ -679,7 +680,7 @@ esphome-tailscale/
 │   ├── capture_web_esphome.py  # Screenshot capture helper for ESPHome web UI
 │   ├── mask_screenshots.py     # Redacts sensitive info from screenshots
 │   └── svg_to_png.py           # Converts SVG diagrams to PNG for the docs
-├── microlink/                 # Git submodule: the Tailscale protocol implementation
+├── microlink/                 # Vendored copy of the Tailscale protocol implementation
 ├── example.yaml               # Reference config that uses the GitHub package
 ├── sonar-project.properties   # SonarCloud project configuration
 ├── SECURITY.md                # Security policy and vulnerability reporting
@@ -722,7 +723,7 @@ Yes. Once connected, it responds to ICMP on its `100.x` address like any other T
 
 This component is **just the glue** between ESPHome and a third-party Tailscale protocol stack. All the hard work on the wire protocol, WireGuard crypto, disco/STUN, and DERP is done by upstream projects:
 
-- **[microlink](https://github.com/CamM2325/microlink)** by **Cameron Malone** ([@CamM2325](https://github.com/CamM2325)) — MIT-licensed, clean-room implementation of the Tailscale protocol for embedded devices. This is the library that actually speaks Tailscale. Included here as a git submodule under `microlink/`.
+- **[microlink](https://github.com/CamM2325/microlink)** by **Cameron Malone** ([@CamM2325](https://github.com/CamM2325)) — MIT-licensed, clean-room implementation of the Tailscale protocol for embedded devices. This is the library that actually speaks Tailscale. Included here as a vendored copy under `microlink/`.
 - **[WireGuard](https://www.wireguard.com/)** — the underlying VPN protocol, designed by **Jason A. Donenfeld**. "WireGuard" is a registered trademark of Jason A. Donenfeld.
 - **X25519** — elliptic curve code derived from public-domain work by **Daniel J. Bernstein**.
 - **[ESPHome](https://esphome.io/)** — the framework this plugs into.
@@ -744,7 +745,7 @@ Bundled / required components keep their own licenses:
 
 | Component | License | Copyright |
 |-----------|---------|-----------|
-| [microlink](https://github.com/CamM2325/microlink) (git submodule) | MIT | © 2025-2026 Cameron Malone |
+| [microlink](https://github.com/CamM2325/microlink) (vendored) | MIT | © 2025-2026 Cameron Malone |
 | WireGuard protocol impl (inside microlink) | MIT (based on public spec) | WireGuard™ — Jason A. Donenfeld |
 | X25519 (inside microlink) | Public domain | Daniel J. Bernstein |
 
