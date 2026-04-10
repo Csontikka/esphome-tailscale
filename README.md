@@ -36,8 +36,8 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 ## Features
 
 - **Pure Tailscale node** — the ESP joins your tailnet directly, no subnet router needed on either side.
-- **Works with official Tailscale & Headscale** — configurable `login_server`.
-- **Home Assistant native** — exposes 20+ entities out of the box: connection status, VPN IP, hostname, peer counts, auth key expiry, uptime, MagicDNS name, peer list, memory mode, HA connection route, reboot/reconnect buttons, enable switch.
+- **Works with official Tailscale**.
+- **Home Assistant native** — exposes a full set of Home Assistant entities out of the box: connection status, VPN IP, hostname, peer counts, auth key expiry, uptime, MagicDNS name, peer status, memory mode, HA connection route, reboot/reconnect buttons, enable switch.
 - **HA Connection Route sensor** — tells you *how* HA is currently reaching the device: `Tailscale Direct`, `Tailscale DERP`, or `Local`. Great for debugging connectivity.
 - **Auth key expiry sensor** — surfaces the real expiry timestamp from the control plane, so you can set up a HA automation that warns you before your key dies.
 - **PSRAM-aware** — auto-detects PSRAM and scales internal buffers (supports large tailnets with 50+ peers).
@@ -52,7 +52,7 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 ### Hardware
 
 - An **ESP32** board with **PSRAM** (recommended: 8 MB Octal PSRAM).
-- **16 MB flash** recommended (8 MB can work but leaves little OTA headroom).
+- **At least 4 MB flash** — enough for the bootloader plus two OTA slots of the ~1 MB firmware. 8 MB or more is only useful if you want to stack other large ESPHome components next to Tailscale.
 
 > **Current testing target:** active development and flashing is being done on **ESP32-S3**. Other ESP32 variants (classic ESP32, ESP32-C3, ESP32-C6, ESP32-P4, …) may work through the upstream [microlink](https://github.com/CamM2325/microlink) library, but they are **not yet verified** by this project. If you get the component running on a non-S3 chip, please open an issue / PR so we can list it here.
 
@@ -68,7 +68,7 @@ Boards currently verified:
 - **ESPHome 2026.3.1** or newer
 - **ESP-IDF framework** (not Arduino) — this is enforced automatically by the package
 - **Home Assistant** with the ESPHome integration enabled
-- A **Tailscale account** (or a Headscale instance)
+- A **Tailscale account**
 
 ---
 
@@ -305,7 +305,6 @@ tailscale:
   enable_stun: true                      # optional, default true
   enable_disco: true                     # optional, default true
   max_peers: 16                          # optional, default 16, range 1–64
-  login_server: "https://headscale.example.com"   # optional, for Headscale users
   update_interval: 30s                   # optional, how often to refresh sensor state
 ```
 
@@ -316,7 +315,6 @@ tailscale:
 | `enable_stun` | `true` | Enable STUN for NAT traversal. Turn off only if your network blocks STUN and you're OK relying on DERP. |
 | `enable_disco` | `true` | Enable the Tailscale "disco" peer discovery protocol. Leave on unless you know what you're doing. |
 | `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes *and* you have PSRAM. |
-| `login_server` | `""` | Headscale URL. Leave empty for official Tailscale control plane. |
 | `update_interval` | `30s` | How often sensor states are re-published. Does **not** affect the tunnel itself. |
 
 ---
@@ -327,7 +325,7 @@ tailscale:
 
 The ESP32 runs [microlink](https://github.com/CamM2325/microlink), a C implementation of the Tailscale client protocol. microlink handles:
 
-- control-plane registration (HTTPS to the Tailscale coordinator or your Headscale),
+- control-plane registration (HTTPS to the Tailscale coordinator),
 - WireGuard key exchange and tunnel setup,
 - peer discovery (disco protocol),
 - NAT traversal via STUN,
@@ -578,11 +576,8 @@ No. That's the whole point. The ESP is its own Tailscale node.
 **Q: Do I need Tailscale Funnel?**
 No. Funnel publishes services to the public internet — that's unrelated. Everything here is private, tailnet-only.
 
-**Q: Does this work with Headscale?**
-Yes. Set `login_server: "https://your.headscale.example.com"` in the `tailscale:` block.
-
 **Q: Can I use this on a plain ESP32 (not S3)?**
-No. The S3 is required, and PSRAM is strongly recommended. The Tailscale stack is too heavy for stock ESP32 RAM.
+Active testing happens on ESP32-S3 with PSRAM — that's the only chip this project currently verifies. The underlying microlink library claims support for other ESP32 variants, but they are **not yet verified here**. PSRAM is strongly recommended regardless, because the Tailscale stack is too heavy for stock ESP32 RAM alone.
 
 **Q: Will this work over cellular / LTE / a hotspot?**
 Yes, as long as outbound UDP and HTTPS are allowed. DERP (TCP 443) is used as a fallback so even heavily-firewalled networks usually work.
