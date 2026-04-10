@@ -5,8 +5,10 @@
 >
 > **This project is in an early, experimental phase.** APIs, entity names, config keys and behaviour can change without notice. Expect bugs, rough edges, and breaking changes between commits. Do **not** rely on this for anything mission-critical yet. If you try it — awesome, feedback is very welcome — but run it knowing that you are the beta tester.
 
-> Native Tailscale VPN on ESP32-S3 as a plug-and-play ESPHome external component.
+> Native Tailscale VPN on **ESP32** as a plug-and-play ESPHome external component.
 > Your ESP joins your tailnet as a real Tailscale node — no subnet router, no reverse proxy, no middleman.
+>
+> *Active testing & development currently happens on **ESP32-S3 with PSRAM**. Other ESP32 variants may work but are not yet verified — see [Requirements](#requirements).*
 
 ![ESPHome Tailscale Hero](docs/images/hero.png)
 <!-- IMAGE: Home Assistant dashboard screenshot showing the Tailscale card with connected state, IP, peers, route, uptime. This is the "sales pitch" image at the top. -->
@@ -27,7 +29,7 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 **This component removes the middleman.** The ESP32 itself becomes a Tailscale node with its own `100.x.x.x` address, showing up in your `tailscale status` list like any laptop or phone. Home Assistant connects to it directly over the tailnet — LAN, mobile data, anywhere — with the same rock-solid `api:` + `ota:` + `web_server:` stack you already trust.
 
 ![Architecture Diagram](docs/images/architecture.png)
-<!-- IMAGE: Simple architecture diagram. Left: Home (HA, phone) inside a "Tailnet" box with a cloud icon. Right: Remote site (ESP32-S3 with the tailscale component) also inside the Tailnet box. Arrow "direct WireGuard (no subnet router)". Below: Tailscale control plane cloud. -->
+<!-- IMAGE: Simple architecture diagram. Left: Home (HA, phone) inside a "Tailnet" box with a cloud icon. Right: Remote site (ESP32 with the tailscale component) also inside the Tailnet box. Arrow "direct WireGuard (no subnet router)". Below: Tailscale control plane cloud. -->
 
 ---
 
@@ -49,13 +51,17 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 
 ### Hardware
 
-- **ESP32-S3** with **PSRAM** (recommended: 8 MB Octal PSRAM).
+- An **ESP32** board with **PSRAM** (recommended: 8 MB Octal PSRAM).
 - **16 MB flash** recommended (8 MB can work but leaves little OTA headroom).
-- Examples that are known to work:
-  - ESP32-S3-DevKitC-1 (8 MB PSRAM, 16 MB flash) — the reference board
-  - ESP32-S3-N16R8
 
-> **Why ESP32-S3 / PSRAM?** The Tailscale control protocol and WireGuard crypto state together need more RAM than a plain ESP32 has. Without PSRAM the component falls back to small buffers and caps around 30 peers — fine for small tailnets, rough for larger ones.
+> **Current testing target:** active development and flashing is being done on **ESP32-S3**. Other ESP32 variants (classic ESP32, ESP32-C3, ESP32-C6, ESP32-P4, …) may work through the upstream [microlink](https://github.com/CamM2325/microlink) library, but they are **not yet verified** by this project. If you get the component running on a non-S3 chip, please open an issue / PR so we can list it here.
+
+Boards currently verified:
+
+- **ESP32-S3-DevKitC-1** (8 MB PSRAM, 16 MB flash) — the reference / test board
+- **ESP32-S3-N16R8**
+
+> **Why PSRAM?** The Tailscale control protocol and WireGuard crypto state together need more RAM than a plain ESP32 has. Without PSRAM the component falls back to small buffers and caps around 30 peers — fine for small tailnets, rough for larger ones.
 
 ### Software
 
