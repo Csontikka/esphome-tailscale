@@ -127,7 +127,7 @@ class TailscaleComponent : public PollingComponent {
   bool psram_available_{false};
   bool ip_notify_pending_{false};
   bool force_publish_{true};
-  uint8_t hint_counter_{0};
+  uint32_t last_hint_ms_{0};
   std::string vpn_ip_str_;
   std::string tailnet_name_;
   uint32_t connected_since_ms_{0};

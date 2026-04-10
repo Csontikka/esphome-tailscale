@@ -151,10 +151,11 @@ void TailscaleComponent::update() {
   // Force-publish all sensors on polling interval (for web_server SSE)
   this->force_publish_ = true;
 
-  // Periodic log hints every 10 minutes (30s polling * 20 = 10min)
-  this->hint_counter_++;
-  if (this->hint_counter_ >= 20) {
-    this->hint_counter_ = 0;
+  // Periodic log hints every 10 minutes, independent of update_interval.
+  constexpr uint32_t HINT_INTERVAL_MS = 600000;  // 10 minutes
+  uint32_t now_ms = millis();
+  if (now_ms - this->last_hint_ms_ >= HINT_INTERVAL_MS) {
+    this->last_hint_ms_ = now_ms;
     if (!this->vpn_ip_str_.empty()) {
       ESP_LOGI(TAG, "Hint: set 'wifi: use_address: \"%s\"' in your ESPHome YAML if device is not visible in Builder",
                this->vpn_ip_str_.c_str());
