@@ -29,11 +29,21 @@ img77 = Image.open(SRC / "77.png").convert("RGBA")
 img77.save(DST / "tailscale-auth-key-create.png")
 print(f"tailscale-auth-key-create.png  ({img77.size[0]}x{img77.size[1]})  no masking")
 
-# 76: Keys page — mask the auth key IDs in the table (ID column of both rows)
+# 76: Keys page — mask the auth key IDs in the table and highlight the
+# "Generate auth key..." button with a gold outline so readers know where to click.
 img76 = Image.open(SRC / "76.png").convert("RGBA")
 # ID column of the two auth key rows
 black_region(img76, (397, 505, 565, 535), label="REDACTED")
 black_region(img76, (397, 541, 565, 571), label="REDACTED")
+# Gold highlight around the "Generate auth key..." button (top-right of Auth keys card)
+draw76 = ImageDraw.Draw(img76)
+gold = (255, 215, 0, 255)
+btn_box = (988, 416, 1120, 448)
+for offset in range(4):
+    draw76.rectangle(
+        (btn_box[0] - offset, btn_box[1] - offset, btn_box[2] + offset, btn_box[3] + offset),
+        outline=gold,
+    )
 img76.save(DST / "tailscale-keys-page.png")
 print(f"tailscale-keys-page.png         ({img76.size[0]}x{img76.size[1]})  masked 2 key IDs")
 
