@@ -458,6 +458,96 @@ action:
 
 ---
 
+## Deployment Notes
+
+A collection of behaviors we've found easy to miss until they cause a surprise — and easier to get right on day one. These are not bugs; they are design consequences of how Tailscale and userspace WireGuard interact with a microcontroller endpoint.
+
+### Subnet routers and the ESP node
+
+If your network already has a Tailscale subnet router advertising the LAN CIDR that the ESP lives on, peers on the tailnet now see two paths to the device: one via the subnet router (arriving at the ESP's LAN address, NAT'd), and one direct (arriving at the ESP's own `100.x` tailnet address). The two paths are not equivalent, and Tailscale's route preference decides which one wins.
+
+We recommend:
+
+- Let the ESP join as its own tailnet node — that is the whole point of this component. The direct path is the one you want.
+- Do **not** re-advertise the ESP's LAN CIDR through the subnet router purely to reach the device; it creates duplicate routing state and makes `HA Connection Route` diagnostics ambiguous.
+- Keep `accept_routes: false` on the ESP itself unless you specifically need another subnet. With `accept_routes: true`, the node honors advertised routes that can include its own LAN — a self-loop that never completes, and a source of flaky behavior that is hard to spot from the logs.
+
+### Userspace WireGuard: what the node can and cannot do
+
+This component uses microlink, a userspace WireGuard stack. There is no kernel TUN device and no netfilter hook, which constrains what the Tailscale node is allowed to do compared with a full Linux `tailscaled`:
+
+| Feature                  | Supported | Notes |
+| ------------------------ | --------- | ----- |
+| Join tailnet as leaf     | Yes       | This is the node's role. |
+| `accept_routes`          | Yes       | Off by default. |
+| Custom `login_server`    | Yes       | Tailscale SaaS or Headscale. |
+| Advertise subnet routes  | No        | The ESP cannot be a subnet router. |
+| Exit node (use or offer) | No        | Neither direction is implemented. |
+| Netfilter / ACL rules    | No        | There is no OS-level firewall to hook into. |
+
+If your architecture requires the ESP to route traffic on behalf of other devices, it won't. Place a Linux subnet router alongside it and keep the ESP as a pure endpoint — that is the supported topology.
+
+### Auth key and node key expiry
+
+Two settings in the Tailscale admin panel decide whether an unattended ESP stays healthy:
+
+1. **Node key expiry.** By default, each machine's key expires after 180 days. When that happens the device drops off the tailnet until re-authentication, which on a sealed ESP means a return visit with a reflash. Disable key expiry per device right after first boot: *Machines → device → ⋯ → Disable key expiry*. The `Tailscale Key Expiry Warning` binary sensor will flip off once it is done.
+2. **Auth key flags.** When generating the key used in `secrets.yaml`, we recommend:
+   - **Pre-authorized**, so the node joins without manual approval.
+   - **Non-ephemeral**, so the machine entry persists across reboots. Ephemeral nodes are wiped while offline and reappear as new entries every boot, quickly cluttering the admin panel.
+   - **Reusable** if the same firmware is flashed to multiple devices; single-use for tighter provisioning control.
+   - **Long expiry** on the key itself. The auth key is only consumed at first boot, but a short expiry window can bite if a replacement device sits on a shelf for a few months before deployment.
+
+### First boot vs subsequent boots
+
+At first boot the component reads the auth key, performs the tailnet join, and persists the resulting node key to NVS. Every subsequent boot reuses that node key, which is why the same device appears as the same machine across power cycles.
+
+Two operations invalidate this and effectively create a new machine on the tailnet:
+
+- **`esptool erase_flash`** wipes NVS and forces a fresh join. The old machine entry in the admin panel becomes orphaned and should be deleted manually.
+- **Changing `hostname`** in the YAML. From Tailscale's perspective this is a new node; the old entry lingers with the old name until deleted.
+
+Clean up orphans when renaming or reflashing. It is easy to accumulate ghost machines otherwise.
+
+### Direct connections versus DERP relays
+
+Tailscale prefers direct peer-to-peer UDP connections and falls back to DERP relays when NAT traversal fails. The fallback is transparent but has measurable cost:
+
+- DERP paths add roughly 50–150 ms of latency depending on the nearest relay.
+- DERP bandwidth is subject to Tailscale's fair-use caps.
+- Sustained high-frequency telemetry over DERP works, but is noticeably slower than direct.
+
+What usually prevents a direct connection:
+
+- **CGNAT or symmetric NAT** on either end — common on mobile carriers and some residential ISPs — makes UDP hole punching fail. The node still works; it will simply always relay.
+- **Outbound UDP 41641** must be reachable for the initial handshake. Most consumer networks allow this; some restricted corporate networks do not.
+- **Hairpin NAT** on the local router affects whether a peer on the same LAN can reach the ESP via its tailnet IP while both are local.
+
+How to tell which mode is in use: the `HA Connection Route` text sensor reports `Tailscale Direct` or `Tailscale DERP` for the current HA session, and the serial log emits the same classification per peer.
+
+### Hardware realities
+
+Development and automated validation happen on ESP32-S3 with PSRAM. Other variants are documented as possible by the underlying libraries, but are not currently verified here.
+
+- **PSRAM is strongly recommended.** The WireGuard crypto buffers, microlink's internal state, and the ESPHome runtime together exceed what stock ESP32 internal RAM has to spare for a stable margin. Without PSRAM, `max_peers` above ~30 is not realistic.
+- **CPU caps WireGuard throughput at roughly 2–5 Mbit/s** on ESP32-S3. This is ample for sensor telemetry and MQTT payloads, but too slow for image or video streaming through the tailnet.
+- **Flash 4 MB minimum, 8 MB or more recommended.** OTA requires enough free flash to hold a second firmware image alongside the running one.
+
+If a particular variant matters to you, running `esphome compile` on the example config is the fastest way to check whether it fits: a failed build names the constraint that was hit.
+
+### ESPHome package cache
+
+When loading the component via `packages:` from a GitHub source, ESPHome caches the fetched content for 24 hours by default. During active development against `main`, this can hide newly pushed changes for a full day.
+
+Two ways around it:
+
+- Add `refresh: 0s` to the `packages:` block, which disables caching and refetches on every compile.
+- Delete `.esphome/external_components/` and `.esphome/packages/` between compiles.
+
+End users who pin to a released tag or a specific commit do not need either workaround — it only matters when tracking `main` actively.
+
+---
+
 ## Troubleshooting
 
 ### The device won't connect at all
