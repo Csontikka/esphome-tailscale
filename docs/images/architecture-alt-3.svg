@@ -1,0 +1,92 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0f1e"/>
+      <stop offset="100%" style="stop-color:#0d1b2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffd700"/>
+      <stop offset="100%" style="stop-color:#b8860b"/>
+    </linearGradient>
+    <linearGradient id="layer" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a3a5c"/>
+      <stop offset="100%" style="stop-color:#0d4f7c"/>
+    </linearGradient>
+    <marker id="arr3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#00b4d8"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="700" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="600" y="50" font-family="'Segoe UI', Arial, sans-serif" font-size="26" font-weight="700" fill="#00b4d8" text-anchor="middle" letter-spacing="2">ARCHITECTURE · LAYERED STACK</text>
+  <line x1="400" y1="60" x2="800" y2="60" stroke="#00b4d8" stroke-width="1" opacity="0.4"/>
+
+  <!-- ESP32 stack (left column) -->
+  <g transform="translate(260, 110)">
+    <text x="0" y="0" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="700" fill="#00b4d8" text-anchor="middle">ESP32-S3 device</text>
+
+    <!-- Layers (bottom to top visually reversed — draw top to bottom since it's a stack) -->
+    <!-- L1: Hardware -->
+    <rect x="-180" y="440" width="360" height="60" rx="4" fill="url(#layer)" stroke="#2ea8d8" stroke-width="1.5"/>
+    <text x="0" y="467" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="white" text-anchor="middle">ESP32-S3 hardware</text>
+    <text x="0" y="488" font-family="'Consolas', monospace" font-size="10" fill="#8aa9c4" text-anchor="middle">Xtensa LX7 · 8MB PSRAM · WiFi radio · Flash</text>
+
+    <!-- L2: ESP-IDF -->
+    <rect x="-180" y="370" width="360" height="60" rx="4" fill="url(#layer)" stroke="#2ea8d8" stroke-width="1.5"/>
+    <text x="0" y="397" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="white" text-anchor="middle">ESP-IDF · FreeRTOS</text>
+    <text x="0" y="418" font-family="'Consolas', monospace" font-size="10" fill="#8aa9c4" text-anchor="middle">Tasks · mbedTLS · WiFi driver · heap caps</text>
+
+    <!-- L3: lwIP -->
+    <rect x="-180" y="300" width="360" height="60" rx="4" fill="url(#layer)" stroke="#2ea8d8" stroke-width="1.5"/>
+    <text x="0" y="327" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="white" text-anchor="middle">lwIP TCP/IP stack</text>
+    <text x="0" y="348" font-family="'Consolas', monospace" font-size="10" fill="#8aa9c4" text-anchor="middle">Sockets · netif · Tailscale virtual interface</text>
+
+    <!-- L4: microlink -->
+    <rect x="-180" y="230" width="360" height="60" rx="4" fill="url(#layer)" stroke="#ffd700" stroke-width="2"/>
+    <text x="0" y="257" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="url(#gold)" text-anchor="middle">microlink (Tailscale protocol)</text>
+    <text x="0" y="278" font-family="'Consolas', monospace" font-size="10" fill="#daa520" text-anchor="middle">WireGuard · disco · STUN · DERP · control plane client</text>
+
+    <!-- L5: ESPHome tailscale component -->
+    <rect x="-180" y="160" width="360" height="60" rx="4" fill="url(#layer)" stroke="#ffd700" stroke-width="2"/>
+    <text x="0" y="187" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="url(#gold)" text-anchor="middle">ESPHome tailscale component</text>
+    <text x="0" y="208" font-family="'Consolas', monospace" font-size="10" fill="#daa520" text-anchor="middle">Sensors · switches · buttons · HA route detection</text>
+
+    <!-- L6: ESPHome app (API/OTA/Web) -->
+    <rect x="-180" y="90" width="360" height="60" rx="4" fill="url(#layer)" stroke="#2ea8d8" stroke-width="1.5"/>
+    <text x="0" y="117" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="white" text-anchor="middle">ESPHome native API · OTA · Web</text>
+    <text x="0" y="138" font-family="'Consolas', monospace" font-size="10" fill="#8aa9c4" text-anchor="middle">Listens on 100.64.x.y (tailnet IP)</text>
+  </g>
+
+  <!-- Tailscale control plane (top right) -->
+  <g transform="translate(900, 220)">
+    <path d="M -100 30 Q -120 30 -120 10 Q -120 -28 -80 -28 Q -70 -50 -30 -50 Q 10 -55 20 -28 Q 56 -28 56 0 Q 84 0 84 24 Q 84 42 56 42 L -90 42 Q -120 42 -100 30 Z"
+          fill="#0d4f7c" stroke="#2ea8d8" stroke-width="2"/>
+    <text x="-18" y="-3" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#00b4d8" text-anchor="middle">Tailscale</text>
+    <text x="-18" y="15" font-family="'Segoe UI', Arial, sans-serif" font-size="11" fill="#e0e0e0" text-anchor="middle">coordinator</text>
+    <text x="-18" y="32" font-family="'Segoe UI', Arial, sans-serif" font-size="9" fill="#8aa9c4" text-anchor="middle">(or Headscale)</text>
+  </g>
+
+  <!-- HA box (bottom right) -->
+  <g transform="translate(900, 510)">
+    <rect x="-100" y="-60" width="200" height="120" rx="8" fill="#1a3a5c" stroke="#2ea8d8" stroke-width="2"/>
+    <text x="0" y="-32" font-family="'Segoe UI', Arial, sans-serif" font-size="16" font-weight="700" fill="#00b4d8" text-anchor="middle">Home Assistant</text>
+    <line x1="-80" y1="-20" x2="80" y2="-20" stroke="#2ea8d8" stroke-width="1" opacity="0.5"/>
+    <text x="0" y="-2" font-family="'Consolas', monospace" font-size="11" fill="#e0e0e0" text-anchor="middle">ESPHome integration</text>
+    <text x="0" y="16" font-family="'Consolas', monospace" font-size="11" fill="#e0e0e0" text-anchor="middle">Tailscale add-on</text>
+    <text x="0" y="34" font-family="'Consolas', monospace" font-size="11" fill="url(#gold)" text-anchor="middle">joins the same tailnet</text>
+  </g>
+
+  <!-- Arrows from stack -->
+  <!-- microlink to coordinator (HTTPS/control) -->
+  <path d="M 440 365 Q 620 290 800 240" fill="none" stroke="#daa520" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arr3)"/>
+  <text x="620" y="290" font-family="'Segoe UI', Arial, sans-serif" font-size="11" fill="#daa520" text-anchor="middle">HTTPS (register · exchange keys)</text>
+
+  <!-- ESPHome API to HA (data plane, over WireGuard) -->
+  <path d="M 440 225 Q 660 340 800 510" fill="none" stroke="#00b4d8" stroke-width="3" marker-end="url(#arr3)"/>
+  <text x="660" y="440" font-family="'Segoe UI', Arial, sans-serif" font-size="12" font-weight="700" fill="#00b4d8" text-anchor="middle" transform="rotate(35 660 440)">ESPHome API over WireGuard tunnel</text>
+
+  <!-- Footer note -->
+  <text x="600" y="660" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#8aa9c4" text-anchor="middle">Gold layers are what this project contributes · the rest is upstream ESPHome / ESP-IDF / Tailscale</text>
+</svg>

@@ -1,0 +1,84 @@
+<svg width="1200" height="300" viewBox="0 0 1200 300" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0f1e"/>
+      <stop offset="100%" style="stop-color:#0d1b2e"/>
+    </linearGradient>
+    <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00b4d8;stop-opacity:0"/>
+      <stop offset="30%" style="stop-color:#00b4d8;stop-opacity:0.8"/>
+      <stop offset="70%" style="stop-color:#00b4d8;stop-opacity:0.8"/>
+      <stop offset="100%" style="stop-color:#00b4d8;stop-opacity:0"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffd700"/>
+      <stop offset="50%" style="stop-color:#daa520"/>
+      <stop offset="100%" style="stop-color:#b8860b"/>
+    </linearGradient>
+    <linearGradient id="tunnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00b4d8;stop-opacity:0.0"/>
+      <stop offset="20%" style="stop-color:#00b4d8;stop-opacity:0.9"/>
+      <stop offset="80%" style="stop-color:#00b4d8;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#00b4d8;stop-opacity:0.0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="300" fill="url(#bg)"/>
+
+  <!-- Circuit pattern -->
+  <g stroke="#1a3a5c" stroke-width="1" opacity="0.5" fill="none">
+    <line x1="0" y1="40" x2="180" y2="40"/><line x1="180" y1="40" x2="200" y2="60"/><line x1="200" y1="60" x2="340" y2="60"/>
+    <circle cx="180" cy="40" r="3" fill="#1a3a5c"/><circle cx="340" cy="60" r="3" fill="#1a3a5c"/>
+    <line x1="900" y1="35" x2="1060" y2="35"/><line x1="1060" y1="35" x2="1080" y2="55"/><line x1="1080" y1="55" x2="1200" y2="55"/>
+    <circle cx="1060" cy="35" r="3" fill="#1a3a5c"/>
+    <line x1="0" y1="260" x2="140" y2="260"/><line x1="140" y1="260" x2="160" y2="280"/>
+    <circle cx="140" cy="260" r="3" fill="#1a3a5c"/>
+    <line x1="1050" y1="265" x2="1200" y2="265"/><circle cx="1050" cy="265" r="3" fill="#1a3a5c"/>
+    <line x1="1150" y1="80" x2="1150" y2="220"/>
+  </g>
+
+  <!-- ALT 2: WireGuard tunnel between ESP32 chip and tailnet cloud -->
+  <g transform="translate(0, 150)">
+    <!-- ESP32 chip on left -->
+    <g transform="translate(100, 0)">
+      <circle cx="0" cy="0" r="44" fill="#1a8fc1" opacity="0.15"/>
+      <circle cx="0" cy="0" r="36" fill="#1a6ea8"/>
+      <circle cx="0" cy="0" r="36" fill="none" stroke="#2ea8d8" stroke-width="2" opacity="0.8"/>
+      <rect x="-14" y="-14" width="28" height="28" rx="3" fill="#2ea8d8" opacity="0.9"/>
+      <text x="0" y="4" font-family="'Arial Black', Arial, sans-serif" font-size="9" font-weight="900" fill="white" text-anchor="middle">S3</text>
+      <line x1="-8" y1="-14" x2="-8" y2="-22" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="0" y1="-14" x2="0" y2="-22" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="8" y1="-14" x2="8" y2="-22" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="-8" y1="14" x2="-8" y2="22" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="0" y1="14" x2="0" y2="22" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="8" y1="14" x2="8" y2="22" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="-14" y1="-8" x2="-22" y2="-8" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="-14" y1="8" x2="-22" y2="8" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="14" y1="-8" x2="22" y2="-8" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="14" y1="8" x2="22" y2="8" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+    </g>
+
+    <!-- Tunnel: thick glowing line with arrows -->
+    <line x1="140" y1="0" x2="218" y2="0" stroke="url(#tunnelGrad)" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- Padlock in middle -->
+    <g transform="translate(180, 0)">
+      <rect x="-10" y="-6" width="20" height="16" rx="2" fill="#daa520" stroke="#ffd700" stroke-width="1.5"/>
+      <path d="M -6 -6 Q -6 -16 0 -16 Q 6 -16 6 -6" fill="none" stroke="#ffd700" stroke-width="2.5"/>
+      <circle cx="0" cy="2" r="1.8" fill="#0a0f1e"/>
+    </g>
+
+    <!-- Cloud (tailnet) on right of tunnel -->
+    <g transform="translate(238, 0)">
+      <path d="M -24 6 Q -30 6 -30 -2 Q -30 -12 -18 -12 Q -14 -22 -2 -22 Q 14 -22 16 -8 Q 28 -8 28 2 Q 28 12 18 12 L -22 12 Q -30 12 -24 6 Z" fill="#0d4f7c" stroke="#2ea8d8" stroke-width="1.8"/>
+      <text x="0" y="4" font-family="'Arial Black', Arial, sans-serif" font-size="9" font-weight="900" fill="#00b4d8" text-anchor="middle">TAILNET</text>
+    </g>
+  </g>
+
+  <text x="330" y="140" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-size="78" font-weight="900" fill="white" letter-spacing="-1">ESPHome</text>
+  <text x="330" y="190" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-size="46" font-weight="900" fill="url(#gold)" letter-spacing="6">TAILSCALE</text>
+
+  <line x1="330" y1="205" x2="1100" y2="205" stroke="url(#lineGrad)" stroke-width="1.5"/>
+
+  <text x="715" y="242" font-family="'Segoe UI', Arial, sans-serif" font-size="24" font-weight="600" fill="#00b4d8" text-anchor="middle" letter-spacing="2">Direct WireGuard tunnel from ESP32 to your tailnet</text>
+</svg>
