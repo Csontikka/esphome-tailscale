@@ -539,12 +539,13 @@ If a particular variant matters to you, running `esphome compile` on the example
 
 When loading the component via `packages:` from a GitHub source, ESPHome caches the fetched content for 24 hours by default. During active development against `main`, this can hide newly pushed changes for a full day.
 
-Two ways around it:
+Three ways around it:
 
 - Add `refresh: 0s` to the `packages:` block, which disables caching and refetches on every compile.
-- Delete `.esphome/external_components/` and `.esphome/packages/` between compiles.
+- Click **Clean All Files** in the ESPHome Dashboard top bar — this wipes cached build artifacts and external packages for every configuration, straight from the web UI.
+- Delete `.esphome/external_components/` and `.esphome/packages/` manually between compiles.
 
-End users who pin to a released tag or a specific commit do not need either workaround — it only matters when tracking `main` actively.
+End users who pin to a released tag or a specific commit do not need any of these workarounds — it only matters when tracking `main` actively.
 
 ---
 
