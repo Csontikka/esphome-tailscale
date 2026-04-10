@@ -7,6 +7,8 @@
 #endif
 #include "esp_psram.h"
 #include "esp_heap_caps.h"
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"
@@ -41,10 +43,23 @@ void TailscaleComponent::start_microlink_() {
   config.auth_key = this->auth_key_.c_str();
   config.device_name = this->hostname_.empty() ? nullptr : this->hostname_.c_str();
   config.max_peers = this->max_peers_;
+  config.ctrl_host = this->login_server_.empty() ? nullptr : this->login_server_.c_str();
 
-  ESP_LOGI(TAG, "Calling microlink_init with auth_key=%s device=%s",
-    config.auth_key ? config.auth_key : "NULL",
-    config.device_name ? config.device_name : "NULL");
+  // Mask the auth key: show only the prefix so "tskey-auth-..." vs "tskey-client-..."
+  // is still distinguishable in logs without leaking the secret portion.
+  char masked_key[20] = "NULL";
+  if (config.auth_key) {
+    size_t klen = strlen(config.auth_key);
+    if (klen <= 12) {
+      snprintf(masked_key, sizeof(masked_key), "(len=%u)", (unsigned)klen);
+    } else {
+      snprintf(masked_key, sizeof(masked_key), "%.12s...", config.auth_key);
+    }
+  }
+  ESP_LOGI(TAG, "Calling microlink_init with auth_key=%s device=%s ctrl_host=%s",
+    masked_key,
+    config.device_name ? config.device_name : "NULL",
+    config.ctrl_host ? config.ctrl_host : "(tailscale)");
   this->ml_ = microlink_init(&config);
   ESP_LOGI(TAG, "microlink_init returned: %p", (void*)this->ml_);
   if (this->ml_ == nullptr) {

@@ -1,0 +1,17 @@
+services:
+  headscale:
+    image: headscale/headscale:0.23.0
+    container_name: headscale-test
+    restart: unless-stopped
+    command: serve
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./config:/etc/headscale
+      - headscale-data:/var/lib/headscale
+    environment:
+      - TZ=UTC
+
+volumes:
+  headscale-data:

@@ -331,6 +331,7 @@ tailscale:
   auth_key: !secret tailscale_auth_key   # required
   hostname: "esp32-tailscale"            # optional, default empty → control plane auto-assigns
   max_peers: 16                          # optional, default 16, range 1–64
+  login_server: ""                       # optional, empty → Tailscale SaaS; set for Headscale / self-hosted
 ```
 
 | Option | Default | Description |
@@ -338,6 +339,7 @@ tailscale:
 | `auth_key` | *(required)* | Tailscale auth key (`tskey-auth-...`). Use `!secret`. |
 | `hostname` | `""` | Name the node registers as. Empty → Tailscale picks one. |
 | `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes *and* you have PSRAM. |
+| `login_server` | `""` | Custom control-plane URL. Empty uses the official Tailscale SaaS coordinator. Set to a Headscale or other self-hosted coordinator URL (e.g., `http://192.168.1.42:8080`) to use it instead. See *Custom control plane (Headscale)* under Deployment Notes. |
 
 > **No `update_interval`.** The component is fully event-driven: sensors publish only when the underlying state actually changes. There is no polling loop to tune — and nothing to reduce CPU/network cost by raising.
 
@@ -474,12 +476,36 @@ This component uses microlink, a userspace WireGuard stack. There is no kernel T
 | ------------------------ | --------- | ----- |
 | Join tailnet as leaf     | Yes       | This is the node's role. |
 | `accept_routes`          | Yes       | Off by default. |
-| Custom `login_server`    | Yes       | Tailscale SaaS or Headscale. |
+| Custom `login_server`    | Yes       | Tailscale SaaS is the tested default. Headscale and other self-hosted coordinators are best-effort — see *Custom control plane (Headscale)* below. |
 | Advertise subnet routes  | No        | The ESP cannot be a subnet router. |
 | Exit node (use or offer) | No        | Neither direction is implemented. |
 | Netfilter / ACL rules    | No        | There is no OS-level firewall to hook into. |
 
 If your architecture requires the ESP to route traffic on behalf of other devices, it won't. Place a Linux subnet router alongside it and keep the ESP as a pure endpoint — that is the supported topology.
+
+### Custom control plane (Headscale)
+
+By default the component registers against the official Tailscale SaaS coordinator at `controlplane.tailscale.com`. That path is the one we actively test and is the recommended configuration for production devices.
+
+The `login_server` YAML option points the node at a different coordinator URL. This is the escape hatch for people running [Headscale](https://github.com/juanfont/headscale) or another Tailscale-compatible control plane. Set it to the full URL the coordinator serves its API on, for example:
+
+```yaml
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  hostname: "esp32-tailscale"
+  login_server: "http://192.168.1.42:8080"
+```
+
+The URL is passed through to the underlying microlink stack at init time; at boot you should see a log line like `Control plane from config: http://192.168.1.42:8080` immediately before microlink starts talking to the coordinator. If you do not set `login_server`, you will not see that line and the node will use the SaaS default.
+
+A few practical notes when pairing this with a Headscale instance:
+
+- **Use the coordinator's LAN IP, not `localhost`.** The ESP cannot reach `localhost` on your workstation — use the IP that is visible to the ESP from its WiFi network, the same address Headscale's `server_url` is configured with.
+- **Plain HTTP works for testing.** The microlink stack accepts `http://` URLs, which is convenient for a local LAN-only Headscale without TLS. Do not run an HTTP-only Headscale on the public internet.
+- **Auth keys come from the coordinator that issues them.** A Tailscale SaaS `tskey-auth-...` will not work against Headscale, and vice versa. Generate the key on the same coordinator you will connect to.
+- **We do not provide first-class Headscale support.** It is best-effort compatibility through microlink; if something is broken we will accept bug reports but our first question will be whether the same YAML also fails against Tailscale SaaS, since that is what we test against on every change.
+
+For a fully working local-testbed example — docker-compose, a minimal `config.yaml`, and the CLI commands to create a user and preauth key — see [`contrib/headscale-test/README.md`](contrib/headscale-test/README.md). That directory is intentionally not shipped via the `packages:` distribution — it exists only so contributors can reproduce the test environment without hunting for Headscale docs.
 
 ### Auth key and node key expiry
 
@@ -674,6 +700,8 @@ esphome-tailscale/
 │   ├── capture_web_esphome.py  # Screenshot capture helper for ESPHome web UI
 │   ├── mask_screenshots.py     # Redacts sensitive info from screenshots
 │   └── svg_to_png.py           # Converts SVG diagrams to PNG for the docs
+├── contrib/
+│   └── headscale-test/         # Local Headscale docker-compose for testing login_server end-to-end
 ├── microlink/                 # Vendored copy of the Tailscale protocol implementation
 ├── example.yaml               # End-user reference config that uses the GitHub package
 ├── example-dev.yaml           # Development config using the local checkout and inline entities

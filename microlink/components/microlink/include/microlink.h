@@ -45,6 +45,12 @@ typedef struct {
     uint32_t disco_heartbeat_ms;    /* DISCO keepalive interval (default: 3000) */
     uint32_t stun_interval_ms;      /* STUN re-probe interval (default: 23000) */
     uint32_t ctrl_watchdog_ms;      /* Control plane watchdog timeout (default: 120000) */
+
+    /* Optional custom control plane host (Headscale / Ionscale / self-hosted).
+     * NULL or empty = use the default Tailscale SaaS control plane.
+     * Format: "http(s)://host[:port]" — e.g., "http://192.168.1.100:8080".
+     * If set, this takes priority over any NVS-persisted ctrl_host override. */
+    const char *ctrl_host;
 } microlink_config_t;
 
 /* Peer info (read-only snapshot) */

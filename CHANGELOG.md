@@ -48,6 +48,21 @@ new empty `[Unreleased]` section added above it.
   peer counts by type (direct vs DERP), heap, PSRAM, uptime.
 - **SNTP time sync** included in the package so key-expiry timestamps render
   correctly in Home Assistant.
+- **Custom control-plane support via `login_server`** — the YAML option
+  is now actually wired through to microlink's control-plane selection
+  (it was a no-op in earlier iterations). Empty keeps the default
+  Tailscale SaaS coordinator; setting a URL such as
+  `http://192.168.1.42:8080` points the node at a Headscale or other
+  self-hosted coordinator instead. The ESPHome setter reaches microlink
+  via a new public `ctrl_host` field on `microlink_config_t` (vendored
+  microlink fork change); config-supplied values take priority over the
+  NVS-persisted override microlink already supported. Headscale support
+  is best-effort, Tailscale SaaS remains the tested path.
+- **`contrib/headscale-test/`** — docker-compose harness, minimal
+  `config.yaml`, and step-by-step README for standing up a local
+  Headscale instance to verify `login_server` end-to-end. Intentionally
+  not shipped via `packages:`; exists only so contributors can
+  reproduce the test environment without hunting for Headscale docs.
 - **Packages-based distribution** — end users can drop a one-line
   `packages:` import into their YAML (see `example.yaml`) instead of hand-
   wiring every entity.
@@ -147,6 +162,14 @@ new empty `[Unreleased]` section added above it.
   so Home Assistant shows "unknown," which is the correct state for a
   timestamp that does not exist. Both "Unknown + OK" and "valid
   timestamp + Warning" are explicitly documented as correct pairs.
+- **Auth key no longer logged in plaintext.** Previously the full
+  Tailscale auth key was emitted at INFO level inside
+  `start_microlink_()`, which meant it landed in the serial console,
+  the HA log stream, and any remote log collector the user had wired
+  up. The log line now masks the key to its first 12 characters plus
+  ellipsis, which is enough to distinguish `tskey-auth-` from
+  `tskey-client-` and similar variants during debugging without
+  exposing the secret portion.
 
 ### Removed
 
@@ -174,8 +197,20 @@ new empty `[Unreleased]` section added above it.
 
 ### Security
 
+- **Tailscale auth key is no longer logged in plaintext** on boot
+  (`tailscale.cpp:45-47` in earlier revisions). See the Fixed section
+  for the full explanation of the fix. This is the reason the v0.1.0
+  release is now safe to cut — the prior behavior was a real
+  secret-leak path into every log surface the ESPHome runtime
+  touches.
 - Added `SECURITY.md` describing the vulnerability reporting channel.
 - CodeQL static analysis now runs on every push via `.github/workflows/codeql.yml`.
+- The CI `validate.yml` workflow now also runs a full `esphome compile`
+  of `example.yaml` on every push and pull request, catching C++-level
+  breakage in the component or the vendored microlink before it lands
+  on `main` and reaches users via `packages: ref: main`. Prior CI only
+  ran `esphome config`, which validated YAML schema but never invoked
+  the toolchain.
 - Git history was rewritten (and force-pushed once, with branch
   protection temporarily relaxed for that single push) to remove a
   previously committed tailnet name and an unmasked device-page
@@ -191,8 +226,13 @@ verified. Treat them as the honest answer to "can I rely on this for X?"
   variants (classic ESP32, C3, C6, P4) may work via microlink, but are
   not tested by this project. If you try it on a different chip, please
   open an issue with your results.
-- **Headscale is not supported.** Only the official Tailscale control
-  plane is tested.
+- **Headscale is best-effort, not first-class.** Only the official
+  Tailscale SaaS control plane is actively tested on every change. The
+  `login_server` YAML option does reach microlink's control-plane
+  selection (since this release) and a local test harness lives in
+  `contrib/headscale-test/`, but we cannot promise feature parity with
+  Tailscale SaaS, and bug reports against Headscale will first be
+  verified against Tailscale SaaS before any investigation.
 - **Node-key auto-renewal at 180 days is not yet verified.** The
   component exposes the current expiry timestamp via the `key_expiry`
   sensor and warns via `key_expiry_warning`, but whether microlink

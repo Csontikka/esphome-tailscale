@@ -6,13 +6,17 @@ on:
     paths:
       - 'components/**'
       - 'packages/**'
+      - 'microlink/**'
       - 'example.yaml'
+      - 'example-dev.yaml'
   pull_request:
     branches: [main]
     paths:
       - 'components/**'
       - 'packages/**'
+      - 'microlink/**'
       - 'example.yaml'
+      - 'example-dev.yaml'
 
 jobs:
   validate:
@@ -63,3 +67,42 @@ jobs:
           api:
           EOF
           esphome config /tmp/test-package.yaml
+
+  compile:
+    runs-on: ubuntu-latest
+    # esphome compile pulls the ESP-IDF toolchain and builds the full
+    # firmware including the vendored microlink component. Schema-level
+    # issues are caught in `validate` above — this job is the net that
+    # catches C++ breakage, missing includes, or a microlink API drift
+    # before it lands on main and reaches users via packages: ref: main.
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Cache ESPHome build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .esphome
+          key: esphome-compile-${{ runner.os }}-${{ hashFiles('components/tailscale/__init__.py', 'microlink/components/microlink/CMakeLists.txt') }}
+          restore-keys: |
+            esphome-compile-${{ runner.os }}-
+
+      - name: Create dummy secrets
+        run: |
+          cat > secrets.yaml << 'EOF'
+          tailscale_auth_key: "tskey-auth-dummy-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+          wifi_ssid: "DummySSID"
+          wifi_password: "DummyPassword"
+          EOF
+
+      - name: Compile example.yaml
+        run: esphome compile example.yaml

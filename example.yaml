@@ -23,6 +23,8 @@ tailscale:
   auth_key: !secret tailscale_auth_key
   hostname: "esp32-tailscale"
   # max_peers: 16  # Optional, default 16
+  # login_server: "http://192.168.1.42:8080"  # Optional, for Headscale / self-hosted control plane
+  #                                           # See contrib/headscale-test/ for a local docker-compose
 
 wifi:
   ssid: !secret wifi_ssid
