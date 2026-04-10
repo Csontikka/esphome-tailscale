@@ -256,6 +256,11 @@ By default Tailscale expires every node key after **180 days** (the tailnet-wide
 
 In Home Assistant you'll see the `Tailscale Key Expiry` timestamp sensor display as **Unknown** (because the timestamp no longer exists — that's the standard HA rendering for an empty `timestamp` sensor) and the `Tailscale Key Expiry Warning` binary sensor display as **OK** (the `problem` device class renders `off` as "OK" with a check icon). That `Unknown` + `OK` pair is the recommended steady state for an unattended node — nothing is missing, nothing is wrong, the key simply never expires.
 
+| Disabled (recommended) | Enabled (needs attention) |
+| :---: | :---: |
+| ![Key expiry OK](docs/images/ha-key-expiry-ok.png) | ![Key expiry Problem](docs/images/ha-key-expiry-problem.png) |
+| `Unknown` + `OK` — key never expires, device stays on the tailnet indefinitely. | `In 6 months` + `Problem` — the node key will expire and the device will drop off the tailnet unless you click **Disable key expiry**. |
+
 ### 6. Add to Home Assistant
 
 Go to **Settings → Devices & Services → ESPHome → Add Device** and enter the Tailscale IP (`100.xx.yy.zz`) from step 4. HA will discover the device and offer to add all entities.
