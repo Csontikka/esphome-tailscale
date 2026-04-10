@@ -38,7 +38,7 @@ black_region(img76, (397, 541, 565, 571), label="REDACTED")
 # Gold highlight around the "Generate auth key..." button (top-right of Auth keys card)
 draw76 = ImageDraw.Draw(img76)
 gold = (255, 215, 0, 255)
-btn_box = (988, 416, 1120, 448)
+btn_box = (994, 413, 1146, 447)
 for offset in range(4):
     draw76.rectangle(
         (btn_box[0] - offset, btn_box[1] - offset, btn_box[2] + offset, btn_box[3] + offset),

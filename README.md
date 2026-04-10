@@ -1,5 +1,13 @@
 # ESPHome Tailscale
 
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/Csontikka/esphome-tailscale?style=plastic)
+[![ESPHome External Component](https://img.shields.io/badge/ESPHome-external%20component-black?style=plastic&logo=esphome&logoColor=white)](https://esphome.io/components/external_components.html)
+[![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=plastic)](https://github.com/Csontikka/esphome-tailscale/blob/main/LICENSE)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=Csontikka_esphome-tailscale&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=Csontikka_esphome-tailscale)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=Csontikka_esphome-tailscale&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=Csontikka_esphome-tailscale)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=Csontikka_esphome-tailscale&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=Csontikka_esphome-tailscale)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-donate-yellow.svg?style=plastic)](https://buymeacoffee.com/csontikka)
+
 > [!WARNING]
 > **🚧 HEAVY DEVELOPMENT — USE AT YOUR OWN RISK 🚧**
 >
@@ -37,9 +45,9 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 
 - **Pure Tailscale node** — the ESP joins your tailnet directly, no subnet router needed on either side.
 - **Works with official Tailscale**.
-- **Home Assistant native** — exposes a full set of Home Assistant entities out of the box: connection status, VPN IP, hostname, peer counts, auth key expiry, uptime, MagicDNS name, peer status, memory mode, HA connection route, reboot/reconnect buttons, enable switch.
+- **Home Assistant native** — exposes a full set of Home Assistant entities out of the box: connection status, VPN IP, hostname, peer counts, key expiry, uptime, MagicDNS name, peer status, memory mode, HA connection route, reboot/reconnect buttons, enable switch.
 - **HA Connection Route sensor** — tells you *how* HA is currently reaching the device: `Tailscale Direct`, `Tailscale DERP`, or `Local`. Great for debugging connectivity.
-- **Auth key expiry sensor** — surfaces the real expiry timestamp from the control plane, so you can set up a HA automation that warns you before your key dies.
+- **Key expiry sensor + warning** — surfaces the node key expiry timestamp from the Tailscale control plane plus a `problem` binary sensor that turns off the moment you click "Disable key expiry".
 - **PSRAM-aware** — auto-detects PSRAM and scales internal buffers (supports large tailnets with 50+ peers).
 - **Self-healing reconnect** — three-phase recovery (rebind → full restart → reboot) when the tailnet link goes stale.
 - **Auto `use_address` hint** — tells you exactly which line to add to your YAML so HA finds the device over Tailscale after first boot.
@@ -246,7 +254,7 @@ By default Tailscale expires every node key after 90 days (or whatever cap your 
 ![Tailscale Disable Key Expiry](docs/images/tailscale-disable-key-expiry.png)
 <!-- IMAGE: Tailscale admin → Machines → row for the ESP32 → menu open, "Disable key expiry" highlighted. Also show the "Expires" column turning into "Disabled". -->
 
-The `Tailscale Auth Key Expiry` sensor on the device will flip to an empty/unknown value, and the `Tailscale Auth Key Status` sensor will report `OK` indefinitely.
+The `Tailscale Key Expiry` timestamp sensor will become unknown/empty, and the `Tailscale Key Expiry Warning` binary sensor (device_class: `problem`) will flip to `off` (OK). That's the recommended steady state for an unattended node.
 
 ### 6. Add to Home Assistant
 
@@ -270,7 +278,8 @@ All entities are created automatically when you include the package.
 
 | Entity | Description |
 | --- | --- |
-| **Tailscale Connected** | `on` when the Tailscale state machine reports `CONNECTED` (WireGuard tunnel is up and the control plane has handshaken). |
+| **Tailscale Connected** | `on` when the Tailscale state machine reports `CONNECTED` (WireGuard tunnel is up and the control plane has handshaken). Device class: `connectivity`. |
+| **Tailscale Key Expiry Warning** | `on` when the node's key expiry is **enabled** in the Tailscale admin (the device will eventually get kicked off the tailnet). `off` once you click **Disable key expiry**. Device class: `problem`. |
 
 ### Text sensors (diagnostic)
 
@@ -283,8 +292,7 @@ All entities are created automatically when you include the package.
 | **Tailscale Memory** | Reports `PSRAM <size>KB` or `Internal RAM` so you can confirm PSRAM was detected. |
 | **Tailscale Setup Hint** | Human-readable next-action hint, e.g. `wifi use_address: 100.x.y.z`. Use this in a HA automation to remind yourself after first flash. |
 | **Tailscale Peer Status** | `OK` / `Warning` / `Full` based on how close you are to the `max_peers` limit. |
-| **Tailscale Auth Key Status** | `OK`, `Warning` (<7 days to expiry), `Expired`, or `Unknown`. |
-| **Tailscale Auth Key Expiry** | ISO-8601 timestamp of the actual key expiry (device_class: `timestamp`). Empty once you disable key expiry on the node. |
+| **Tailscale Key Expiry** | ISO-8601 timestamp of the node's key expiry (device_class: `timestamp`). Empty/unknown once you disable key expiry on the node — see the **Tailscale Key Expiry Warning** binary sensor for the simple on/off view. |
 | **HA Connection Route** | How the *currently-connected* HA instance is reaching the device: `Tailscale Direct`, `Tailscale DERP`, `Local`, or `Unknown`. Updates live. |
 
 ### Sensors
@@ -320,8 +328,6 @@ All options go under the `tailscale:` block:
 tailscale:
   auth_key: !secret tailscale_auth_key   # required
   hostname: "esp32-tailscale"            # optional, default empty → control plane auto-assigns
-  enable_stun: true                      # optional, default true
-  enable_disco: true                     # optional, default true
   max_peers: 16                          # optional, default 16, range 1–64
   update_interval: 30s                   # optional, how often to refresh sensor state
 ```
@@ -330,10 +336,10 @@ tailscale:
 | --- | --- | --- |
 | `auth_key` | *(required)* | Tailscale auth key (`tskey-auth-...`). Use `!secret`. |
 | `hostname` | `""` | Name the node registers as. Empty → Tailscale picks one. |
-| `enable_stun` | `true` | Enable STUN for NAT traversal. Turn off only if your network blocks STUN and you're OK relying on DERP. |
-| `enable_disco` | `true` | Enable the Tailscale "disco" peer discovery protocol. Leave on unless you know what you're doing. |
 | `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes *and* you have PSRAM. |
 | `update_interval` | `30s` | How often sensor states are re-published. Does **not** affect the tunnel itself. |
+
+> **What about STUN / DISCO?** The Tailscale stack always runs **STUN** (to discover how your NAT maps outbound UDP) and **DISCO** (Tailscale's peer discovery / path-probing protocol) — they're essential for getting direct peer-to-peer connections. They can't be turned off in this component because microlink runs them unconditionally; they have no config knob.
 
 ---
 
@@ -412,9 +418,9 @@ entities:
     name: Peers direct
   - entity: sensor.esp32_tailscale_tailscale_peers_derp
     name: Peers DERP
-  - entity: text_sensor.esp32_tailscale_tailscale_auth_key_status
-    name: Auth key status
-  - entity: sensor.esp32_tailscale_tailscale_auth_key_expiry
+  - entity: binary_sensor.esp32_tailscale_tailscale_key_expiry_warning
+    name: Key expiry warning
+  - entity: sensor.esp32_tailscale_tailscale_key_expiry
     name: Key expires
   - type: buttons
     entities:
@@ -424,23 +430,25 @@ entities:
         name: Reboot
 ```
 
-### Automation: warn before the auth key expires
+### Automation: warn if key expiry is still enabled
 
-If you forget to disable key expiry, this automation gives you a week's warning.
+If you forget to disable key expiry on a new node, this automation nags you as soon as the device comes online with expiry still set. The `Tailscale Key Expiry Warning` binary sensor is `on` whenever the control plane reports a non-zero expiry.
 
 ```yaml
-alias: Tailscale auth key expiring soon
+alias: Tailscale key expiry still enabled
 trigger:
   - platform: state
-    entity_id: text_sensor.esp32_tailscale_tailscale_auth_key_status
-    to: "Warning"
+    entity_id: binary_sensor.esp32_tailscale_tailscale_key_expiry_warning
+    to: "on"
+    for: "00:02:00"
 action:
   - service: notify.mobile_app_phone
     data:
-      title: "Tailscale key expiring"
+      title: "Tailscale key expiry still on"
       message: >
-        The Tailscale auth key on {{ states.text_sensor.esp32_tailscale_tailscale_auth_key_status.attributes.friendly_name }}
-        expires soon. Open the Tailscale admin console and disable key expiry.
+        ESP32 Tailscale node key will expire at
+        {{ states('sensor.esp32_tailscale_tailscale_key_expiry') }}.
+        Open the Tailscale admin console and click "Disable key expiry".
 ```
 
 ### Automation: alert on disconnect
@@ -477,12 +485,14 @@ Check the serial log for the state machine output. You should cycle through `IDL
 
 ### Auth key expired
 
-Symptom: `Tailscale Auth Key Status` sensor shows `Expired`, or the log shows `State: ERROR` after a fresh flash.
+Symptom: the log shows `State: ERROR` / `REGISTERING` failing after a fresh flash, the `Tailscale Connected` binary sensor never turns on, and the Tailscale admin shows no new machine. This usually means the pre-authentication key you baked into the firmware has expired or been revoked.
 
 1. Generate a new auth key (see [Quick Start step 1](#1-create-a-tailscale-auth-key)).
 2. Update `secrets.yaml`.
 3. Re-flash (OTA is fine if the device is still reachable; otherwise USB).
-4. **Disable key expiry on the new node** right away so it doesn't happen again.
+4. **Disable key expiry on the new node** right away so it doesn't happen again. The `Tailscale Key Expiry Warning` binary sensor will flip to `off` once you do.
+
+> **Note:** The `Tailscale Key Expiry` sensor reflects the *node* key expiry (received from the Tailscale control plane), not the auth key used to register the device. Auth key expiry is never sent to the device, so it can't be monitored from HA.
 
 ### HA can't reach the device after OTA
 
@@ -601,7 +611,7 @@ Active testing happens on ESP32-S3 with PSRAM — that's the only chip this proj
 Yes, as long as outbound UDP and HTTPS are allowed. DERP (TCP 443) is used as a fallback so even heavily-firewalled networks usually work.
 
 **Q: How much flash does it use?**
-About 1 MB for the firmware including the Tailscale stack. 4 MB flash is tight; 8 MB is fine; 16 MB is comfortable with OTA.
+The compiled firmware (including the full Tailscale stack) is around **1 MB**. A stock **4 MB** flash chip is plenty — it holds the bootloader, two OTA slots for that ~1 MB image, and still has room left for a small SPIFFS/LittleFS partition. 8 MB / 16 MB boards only matter if you plan to stack other large components next to Tailscale.
 
 **Q: Can I run multiple ESPs on the same auth key?**
 Yes, if the auth key is marked **Reusable** in the Tailscale admin. Each ESP will get its own `100.x` address.
@@ -629,6 +639,14 @@ This component is **just the glue** between ESPHome and a third-party Tailscale 
 > **This project is not affiliated with, sponsored by, or endorsed by Tailscale Inc., Jason A. Donenfeld, or the WireGuard project.**
 >
 > "Tailscale" is a trademark of Tailscale Inc. "WireGuard" is a registered trademark of Jason A. Donenfeld. Both names are used here only to describe interoperability with the respective services and protocols. No Tailscale source code is included, copied, or redistributed in this repository — the protocol layer is provided by the separate, independently-maintained microlink library.
+
+---
+
+## Support
+
+Found a bug or have an idea? [Open an issue](https://github.com/Csontikka/esphome-tailscale/issues) — feedback and feature requests are welcome!
+
+If you find this component useful, consider [buying me a coffee](https://buymeacoffee.com/csontikka) ☕
 
 ---
 
