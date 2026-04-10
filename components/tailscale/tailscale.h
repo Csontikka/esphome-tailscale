@@ -38,7 +38,6 @@ class TailscaleComponent : public PollingComponent {
   // Setters called from codegen
   void set_auth_key(const std::string &key) { this->auth_key_ = key; }
   void set_hostname(const std::string &hostname) { this->hostname_ = hostname; }
-  void set_enable_derp(bool enable) { this->enable_derp_ = enable; }
   void set_enable_stun(bool enable) { this->enable_stun_ = enable; }
   void set_enable_disco(bool enable) { this->enable_disco_ = enable; }
   void set_max_peers(uint8_t max) { this->max_peers_ = max; }
@@ -77,9 +76,17 @@ class TailscaleComponent : public PollingComponent {
   void set_auth_key_status_text_sensor(text_sensor::TextSensor *sensor) {
     this->auth_key_status_sensor_ = sensor;
   }
+  void set_auth_key_expiry_text_sensor(text_sensor::TextSensor *sensor) {
+    this->auth_key_expiry_sensor_ = sensor;
+  }
+  void set_ha_connection_route_text_sensor(text_sensor::TextSensor *sensor) {
+    this->ha_route_sensor_ = sensor;
+  }
+  void set_ha_connection_ip_text_sensor(text_sensor::TextSensor *sensor) {
+    this->ha_ip_sensor_ = sensor;
+  }
 #endif
 #ifdef USE_SWITCH
-  void set_derp_switch(switch_::Switch *sw) { this->derp_switch_ = sw; }
   void set_enable_switch(switch_::Switch *sw) { this->enable_switch_ = sw; }
 #endif
 #ifdef USE_SENSOR
@@ -95,9 +102,7 @@ class TailscaleComponent : public PollingComponent {
   std::string get_vpn_ip() const;
   int get_peer_count() const;
   void request_reconnect();
-  void set_derp_enabled(bool enabled);
   void set_tailscale_enabled(bool enabled);
-  void confirm_derp_rollback();
   void confirm_enable_rollback();
 
  protected:
@@ -109,11 +114,11 @@ class TailscaleComponent : public PollingComponent {
   void start_microlink_();
   void check_ip_config_(const char *vpn_ip);
   void send_ip_notification_();
+  std::string detect_ha_route_(std::string *out_ip = nullptr);
 
   // Config
   std::string auth_key_;
   std::string hostname_;
-  bool enable_derp_{true};
   bool enable_stun_{true};
   bool enable_disco_{true};
   uint8_t max_peers_{16};
@@ -137,9 +142,6 @@ class TailscaleComponent : public PollingComponent {
   uint32_t reconnect_start_ms_{0};
 
   // Switch rollback state (60s dead man's switch)
-  bool derp_rollback_pending_{false};
-  bool derp_rollback_value_{true};  // value to restore on rollback
-  uint32_t derp_rollback_ms_{0};
   bool enable_rollback_pending_{false};
   bool enable_rollback_value_{true};
   uint32_t enable_rollback_ms_{0};
@@ -158,6 +160,9 @@ class TailscaleComponent : public PollingComponent {
   text_sensor::TextSensor *peer_list_sensor_{nullptr};
   text_sensor::TextSensor *tailnet_name_sensor_{nullptr};
   text_sensor::TextSensor *auth_key_status_sensor_{nullptr};
+  text_sensor::TextSensor *auth_key_expiry_sensor_{nullptr};
+  text_sensor::TextSensor *ha_route_sensor_{nullptr};
+  text_sensor::TextSensor *ha_ip_sensor_{nullptr};
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *peers_total_sensor_{nullptr};
@@ -168,7 +173,6 @@ class TailscaleComponent : public PollingComponent {
   sensor::Sensor *uptime_sensor_{nullptr};
 #endif
 #ifdef USE_SWITCH
-  switch_::Switch *derp_switch_{nullptr};
   switch_::Switch *enable_switch_{nullptr};
 #endif
 };
@@ -185,19 +189,6 @@ class TailscaleReconnectButton : public button::Button, public Component {
 #endif
 
 #ifdef USE_SWITCH
-class TailscaleDerpSwitch : public switch_::Switch, public Component {
- public:
-  void set_parent(TailscaleComponent *parent) { this->parent_ = parent; }
-  void setup() override { this->publish_state(true); }
-
- protected:
-  void write_state(bool state) override {
-    this->parent_->set_derp_enabled(state);
-    this->publish_state(state);
-  }
-  TailscaleComponent *parent_{nullptr};
-};
-
 class TailscaleEnableSwitch : public switch_::Switch, public Component {
  public:
   void set_parent(TailscaleComponent *parent) { this->parent_ = parent; }

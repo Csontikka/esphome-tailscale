@@ -54,6 +54,8 @@ sensor:
 
 button:
   - platform: tailscale
+  - platform: restart
+    name: "Reboot"
 
 switch:
   - platform: tailscale

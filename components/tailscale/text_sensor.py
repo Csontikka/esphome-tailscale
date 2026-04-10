@@ -7,6 +7,10 @@ from . import TailscaleComponent
 CONF_TAILSCALE_ID = "tailscale_id"
 
 TS_SCHEMA = text_sensor.text_sensor_schema(entity_category="diagnostic")
+TS_TIMESTAMP_SCHEMA = text_sensor.text_sensor_schema(
+    entity_category="diagnostic",
+    device_class="timestamp",
+)
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -17,9 +21,12 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("setup_status", default={"name": "Tailscale Setup Hint"}): TS_SCHEMA,
         cv.Optional("peer_status", default={"name": "Tailscale Peer Status"}): TS_SCHEMA,
         cv.Optional("magicdns", default={"name": "Tailscale MagicDNS"}): TS_SCHEMA,
-        cv.Optional("peer_list", default={"name": "Tailscale Peer List"}): TS_SCHEMA,
+        cv.Optional("peer_list"): TS_SCHEMA,
         cv.Optional("tailnet_name", default={"name": "Tailscale Tailnet"}): TS_SCHEMA,
         cv.Optional("auth_key_status", default={"name": "Tailscale Auth Key Status"}): TS_SCHEMA,
+        cv.Optional("auth_key_expiry", default={"name": "Tailscale Auth Key Expiry"}): TS_TIMESTAMP_SCHEMA,
+        cv.Optional("ha_connection_route", default={"name": "HA Connection Route"}): TS_SCHEMA,
+        cv.Optional("ha_connection_ip", default={"name": "HA Connection IP"}): TS_SCHEMA,
     }
 )
 
@@ -37,6 +44,11 @@ async def to_code(config):
         ("peer_list", "set_peer_list_text_sensor"),
         ("tailnet_name", "set_tailnet_name_text_sensor"),
         ("auth_key_status", "set_auth_key_status_text_sensor"),
+        ("auth_key_expiry", "set_auth_key_expiry_text_sensor"),
+        ("ha_connection_route", "set_ha_connection_route_text_sensor"),
+        ("ha_connection_ip", "set_ha_connection_ip_text_sensor"),
     ]:
+        if key not in config:
+            continue
         sens = await text_sensor.new_text_sensor(config[key])
         cg.add(getattr(parent, setter)(sens))

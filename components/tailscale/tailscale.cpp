@@ -8,6 +8,9 @@
 #include "esp_psram.h"
 #include "esp_heap_caps.h"
 #include <ctime>
+#include "lwip/tcp.h"
+#include "lwip/priv/tcp_priv.h"
+#include "lwip/ip_addr.h"
 
 namespace esphome {
 namespace tailscale {
@@ -37,7 +40,6 @@ void TailscaleComponent::start_microlink_() {
   microlink_config_t config = {};
   config.auth_key = this->auth_key_.c_str();
   config.device_name = this->hostname_.empty() ? nullptr : this->hostname_.c_str();
-  config.enable_derp = this->enable_derp_;
   config.enable_stun = this->enable_stun_;
   config.enable_disco = this->enable_disco_;
   config.max_peers = this->max_peers_;
@@ -77,34 +79,12 @@ void TailscaleComponent::loop() {
 #ifdef USE_API
   api_alive = api::global_api_server != nullptr && api::global_api_server->is_connected();
 #endif
-  if (this->derp_rollback_pending_ && api_alive && (millis() - this->derp_rollback_ms_ > 30000)) {
-    ESP_LOGI(TAG, "DERP change auto-confirmed (HA API still alive after 30s)");
-    this->derp_rollback_pending_ = false;
-  }
   if (this->enable_rollback_pending_ && api_alive && (millis() - this->enable_rollback_ms_ > 30000)) {
     ESP_LOGI(TAG, "Tailscale enable change auto-confirmed (HA API still alive after 30s)");
     this->enable_rollback_pending_ = false;
   }
 
   // 60s rollback timers for switches (HA unreachable = restore)
-  if (this->derp_rollback_pending_ && (millis() - this->derp_rollback_ms_ > 60000)) {
-    ESP_LOGW(TAG, "DERP rollback: no confirmation in 60s, restoring previous state");
-    this->enable_derp_ = this->derp_rollback_value_;
-    this->derp_rollback_pending_ = false;
-#ifdef USE_SWITCH
-    if (this->derp_switch_ != nullptr) {
-      this->derp_switch_->publish_state(this->derp_rollback_value_);
-    }
-#endif
-    // Full restart to apply config
-    if (this->ml_ != nullptr) {
-      microlink_stop(this->ml_);
-      microlink_destroy(this->ml_);
-      this->ml_ = nullptr;
-      this->current_state_ = ML_STATE_IDLE;
-      this->state_changed_ = true;
-    }
-  }
   if (this->enable_rollback_pending_ && (millis() - this->enable_rollback_ms_ > 60000)) {
     ESP_LOGW(TAG, "Enable rollback: no confirmation in 60s, restoring previous state");
     this->tailscale_user_enabled_ = this->enable_rollback_value_;
@@ -213,7 +193,6 @@ void TailscaleComponent::update() {
 void TailscaleComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "Tailscale:");
   ESP_LOGCONFIG(TAG, "  Hostname: %s", this->hostname_.empty() ? "(auto)" : this->hostname_.c_str());
-  ESP_LOGCONFIG(TAG, "  DERP: %s", YESNO(this->enable_derp_));
   ESP_LOGCONFIG(TAG, "  STUN: %s", YESNO(this->enable_stun_));
   ESP_LOGCONFIG(TAG, "  DISCO: %s", YESNO(this->enable_disco_));
   ESP_LOGCONFIG(TAG, "  Max Peers: %u", this->max_peers_);
@@ -349,36 +328,56 @@ void TailscaleComponent::publish_state_() {
       }
     }
   }
-  if (this->auth_key_status_sensor_ != nullptr && this->ml_ != nullptr) {
+  if ((this->auth_key_status_sensor_ != nullptr || this->auth_key_expiry_sensor_ != nullptr) &&
+      this->ml_ != nullptr) {
     std::string key_status;
+    std::string key_expiry_iso;  // ISO 8601 UTC, or empty for unknown
     int64_t expiry = microlink_get_key_expiry(this->ml_);
     bool expired = microlink_is_key_expired(this->ml_);
     if (expired) {
       key_status = "Expired";
+      key_expiry_iso = "";  // unknown/none for timestamp sensor
     } else if (expiry == 0) {
-      key_status = connected ? "No expiry" : "Unknown";
+      key_status = connected ? "OK" : "Unknown";
+      key_expiry_iso = "";
     } else {
-      // Compute days until expiry
       time_t now = ::time(nullptr);
       int64_t remaining = expiry - (int64_t)now;
       if (remaining <= 0) {
         key_status = "Expired";
+        key_expiry_iso = "";
       } else {
         int days = (int)(remaining / 86400);
-        int hours = (int)((remaining % 86400) / 3600);
-        char buf[48];
-        // Format: "OK (42d 3h left)" or "WARN (2d left)"
-        const char *prefix = (days < 7) ? "WARN" : "OK";
-        if (days > 0) {
-          snprintf(buf, sizeof(buf), "%s (%dd %dh left)", prefix, days, hours);
-        } else {
-          snprintf(buf, sizeof(buf), "WARN (%dh left)", hours);
-        }
-        key_status = buf;
+        // Status: simple word — <7 days = Warning
+        key_status = (days < 7) ? "Warning" : "OK";
+        // Expiry: ISO 8601 UTC timestamp for HA timestamp device_class
+        struct tm tm_exp;
+        time_t exp_t = (time_t)expiry;
+        gmtime_r(&exp_t, &tm_exp);
+        char iso_buf[32];
+        strftime(iso_buf, sizeof(iso_buf), "%Y-%m-%dT%H:%M:%S+00:00", &tm_exp);
+        key_expiry_iso = iso_buf;
       }
     }
-    if (force || this->auth_key_status_sensor_->state != key_status) {
+    if (this->auth_key_status_sensor_ != nullptr &&
+        (force || this->auth_key_status_sensor_->state != key_status)) {
       this->auth_key_status_sensor_->publish_state(key_status);
+    }
+    if (this->auth_key_expiry_sensor_ != nullptr &&
+        (force || this->auth_key_expiry_sensor_->state != key_expiry_iso)) {
+      this->auth_key_expiry_sensor_->publish_state(key_expiry_iso);
+    }
+  }
+  if (this->ha_route_sensor_ != nullptr || this->ha_ip_sensor_ != nullptr) {
+    std::string ha_ip;
+    std::string route = this->detect_ha_route_(&ha_ip);
+    if (this->ha_route_sensor_ != nullptr &&
+        (force || this->ha_route_sensor_->state != route)) {
+      this->ha_route_sensor_->publish_state(route);
+    }
+    if (this->ha_ip_sensor_ != nullptr &&
+        (force || this->ha_ip_sensor_->state != ha_ip)) {
+      this->ha_ip_sensor_->publish_state(ha_ip);
     }
   }
   if (this->tailnet_name_sensor_ != nullptr && this->ml_ != nullptr && this->tailnet_name_.empty()) {
@@ -490,23 +489,6 @@ void TailscaleComponent::publish_state_() {
 #endif
 }
 
-void TailscaleComponent::set_derp_enabled(bool enabled) {
-  ESP_LOGI(TAG, "DERP %s requested - forcing full microlink restart", enabled ? "enable" : "disable");
-  this->derp_rollback_value_ = this->enable_derp_;
-  this->enable_derp_ = enabled;
-  this->derp_rollback_pending_ = true;
-  this->derp_rollback_ms_ = millis();
-  // Config change requires full stop/destroy/re-init (rebind doesn't re-read config)
-  if (this->ml_ != nullptr) {
-    microlink_stop(this->ml_);
-    microlink_destroy(this->ml_);
-    this->ml_ = nullptr;
-    this->current_state_ = ML_STATE_IDLE;
-    this->state_changed_ = true;
-    // Next loop() iteration will re-init with new config
-  }
-}
-
 void TailscaleComponent::set_tailscale_enabled(bool enabled) {
   ESP_LOGI(TAG, "Tailscale %s requested", enabled ? "enable" : "disable");
   this->enable_rollback_value_ = this->tailscale_user_enabled_;
@@ -514,22 +496,23 @@ void TailscaleComponent::set_tailscale_enabled(bool enabled) {
   this->enable_rollback_pending_ = true;
   this->enable_rollback_ms_ = millis();
   if (!enabled && this->ml_ != nullptr) {
-    ESP_LOGI(TAG, "Stopping Tailscale...");
-    microlink_stop(this->ml_);
-    microlink_destroy(this->ml_);
-    this->ml_ = nullptr;
-    this->current_state_ = ML_STATE_IDLE;
-    this->state_changed_ = true;
+    ESP_LOGI(TAG, "Stopping Tailscale in 300ms...");
+    // Deferred teardown so the switch state change can flush through the API first
+    // (otherwise HA sees the TCP tear down before the state update arrives and its
+    //  optimistic UI snaps the switch back to the previous value).
+    this->set_timeout("tailscale_stop", 300, [this]() {
+      if (this->ml_ != nullptr) {
+        ESP_LOGI(TAG, "Stopping Tailscale now");
+        microlink_stop(this->ml_);
+        microlink_destroy(this->ml_);
+        this->ml_ = nullptr;
+        this->current_state_ = ML_STATE_IDLE;
+        this->state_changed_ = true;
+      }
+    });
   } else if (enabled && this->ml_ == nullptr) {
     ESP_LOGI(TAG, "Re-enabling Tailscale...");
     // Will start in next loop() iteration
-  }
-}
-
-void TailscaleComponent::confirm_derp_rollback() {
-  if (this->derp_rollback_pending_) {
-    ESP_LOGI(TAG, "DERP change confirmed, rollback cancelled");
-    this->derp_rollback_pending_ = false;
   }
 }
 
@@ -561,6 +544,81 @@ void TailscaleComponent::request_reconnect() {
     this->reconnect_phase_ = RECONNECT_FULL;
     this->reconnect_start_ms_ = millis();
   }
+}
+
+std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
+  if (out_ip != nullptr) out_ip->clear();
+#ifdef USE_API
+  if (api::global_api_server == nullptr || !api::global_api_server->is_connected()) {
+    return "Unknown";
+  }
+  uint16_t api_port = api::global_api_server->get_port();
+  // Iterate lwIP active TCP pcbs to find the API client connection.
+  // Last-wins on multi-HA: we take the first ESTABLISHED pcb on api_port we see.
+  // Note: We skip LOCK_TCPIP_CORE() here — it's not exported by ESP-IDF's lwipopts.
+  // Read-only pcb list traversal is safe enough for diagnostics; worst case is a
+  // stale snapshot, not a crash.
+  // Iterate ALL matching pcbs — multiple clients may connect (HA Core, ESPHome Builder,
+  // mobile app, etc). Strategy: prefer Tailscale-range pcb for the Route value; dump the
+  // full comma-separated IP list into out_ip so the user can debug what's connected.
+  std::string route = "Unknown";
+  std::string all_ips;
+  bool ts_pcb_found = false;
+  std::string ts_route;
+  std::string nonts_route;
+  for (struct tcp_pcb *pcb = tcp_active_pcbs; pcb != nullptr; pcb = pcb->next) {
+    if (pcb->local_port != api_port) continue;
+    if (pcb->state != ESTABLISHED) continue;
+    if (!IP_IS_V4_VAL(pcb->remote_ip)) continue;
+    uint32_t remote = ip_addr_get_ip4_u32(&pcb->remote_ip);  // network order
+    uint8_t b0 = remote & 0xFF;
+    uint8_t b1 = (remote >> 8) & 0xFF;
+    uint8_t b2 = (remote >> 16) & 0xFF;
+    uint8_t b3 = (remote >> 24) & 0xFF;
+    // microlink vpn_ip is host-order with first octet in MSB: (b0<<24)|(b1<<16)|(b2<<8)|b3
+    uint32_t ml_ip = ((uint32_t)b0 << 24) | ((uint32_t)b1 << 16) |
+                     ((uint32_t)b2 << 8) | (uint32_t)b3;
+    char ip_buf[16];
+    snprintf(ip_buf, sizeof(ip_buf), "%u.%u.%u.%u", b0, b1, b2, b3);
+    if (!all_ips.empty()) all_ips += ", ";
+    all_ips += ip_buf;
+    // Tailscale CGNAT range: 100.64.0.0/10
+    bool in_tailscale = (b0 == 100) && (b1 >= 64) && (b1 <= 127);
+    if (in_tailscale) {
+      ts_pcb_found = true;
+      if (this->ml_ != nullptr) {
+        int count = microlink_get_peer_count(this->ml_);
+        bool found = false;
+        for (int i = 0; i < count; i++) {
+          microlink_peer_info_t info;
+          if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK) {
+            if (info.vpn_ip == ml_ip) {
+              ts_route = info.direct_path ? "Tailscale Direct" : "Tailscale DERP";
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) ts_route = "Tailscale (unknown)";
+      } else {
+        ts_route = "Tailscale (unknown)";
+      }
+    } else if (nonts_route.empty()) {
+      nonts_route = "Local";
+    }
+  }
+  // Prefer Tailscale route if any TS pcb was found (that's the "real" HA Core path
+  // when user configured via 100.x Tailscale IP). Otherwise fall back.
+  if (ts_pcb_found) {
+    route = ts_route;
+  } else if (!nonts_route.empty()) {
+    route = nonts_route;
+  }
+  if (out_ip != nullptr) *out_ip = all_ips;
+  return route;
+#else
+  return "Unknown";
+#endif
 }
 
 void TailscaleComponent::check_ip_config_(const char *vpn_ip) {

@@ -32,17 +32,21 @@ text_sensor:
       name: "Tailscale Peer Status"
     magicdns:
       name: "Tailscale MagicDNS"
-    peer_list:
-      name: "Tailscale Peer List"
     tailnet_name:
       name: "Tailscale Tailnet"
     auth_key_status:
       name: "Tailscale Auth Key Status"
+    auth_key_expiry:
+      name: "Tailscale Auth Key Expiry"
+    ha_connection_route:
+      name: "HA Connection Route"
 
 button:
   - platform: tailscale
     reconnect:
       name: "Tailscale Reconnect"
+  - platform: restart
+    name: "Reboot"
 
 sensor:
   - platform: tailscale
@@ -59,7 +63,5 @@ sensor:
 
 switch:
   - platform: tailscale
-    derp_enabled:
-      name: "Tailscale DERP"
     tailscale_enabled:
       name: "Tailscale Enabled"
