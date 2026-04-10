@@ -1,5 +1,10 @@
 # ESPHome Tailscale
 
+> [!WARNING]
+> **🚧 HEAVY DEVELOPMENT — USE AT YOUR OWN RISK 🚧**
+>
+> **This project is in an early, experimental phase.** APIs, entity names, config keys and behaviour can change without notice. Expect bugs, rough edges, and breaking changes between commits. Do **not** rely on this for anything mission-critical yet. If you try it — awesome, feedback is very welcome — but run it knowing that you are the beta tester.
+
 > Native Tailscale VPN on ESP32-S3 as a plug-and-play ESPHome external component.
 > Your ESP joins your tailnet as a real Tailscale node — no subnet router, no reverse proxy, no middleman.
 
