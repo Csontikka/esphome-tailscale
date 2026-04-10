@@ -254,7 +254,7 @@ By default Tailscale expires every node key after **180 days** (the tailnet-wide
 ![Tailscale Disable Key Expiry](docs/images/tailscale-disable-key-expiry.png)
 <!-- IMAGE: Tailscale admin → Machines → row for the ESP32 → menu open, "Disable key expiry" highlighted. Also show the "Expires" column turning into "Disabled". -->
 
-The `Tailscale Key Expiry` timestamp sensor will become unknown/empty, and the `Tailscale Key Expiry Warning` binary sensor (device_class: `problem`) will flip to `off` (OK). That's the recommended steady state for an unattended node.
+In Home Assistant you'll see the `Tailscale Key Expiry` timestamp sensor display as **Unknown** (because the timestamp no longer exists — that's the standard HA rendering for an empty `timestamp` sensor) and the `Tailscale Key Expiry Warning` binary sensor display as **OK** (the `problem` device class renders `off` as "OK" with a check icon). That `Unknown` + `OK` pair is the recommended steady state for an unattended node — nothing is missing, nothing is wrong, the key simply never expires.
 
 ### 6. Add to Home Assistant
 
@@ -279,7 +279,7 @@ All entities are created automatically when you include the package.
 | Entity | Description |
 | --- | --- |
 | **Tailscale Connected** | `on` when the Tailscale state machine reports `CONNECTED` (WireGuard tunnel is up and the control plane has handshaken). Device class: `connectivity`. |
-| **Tailscale Key Expiry Warning** | `on` when the node's key expiry is **enabled** in the Tailscale admin (the device will eventually get kicked off the tailnet). `off` once you click **Disable key expiry**. Device class: `problem`. |
+| **Tailscale Key Expiry Warning** | `on` when the node's key expiry is **enabled** in the Tailscale admin (HA shows this as "Problem" — the device will eventually get kicked off the tailnet). `off` once you click **Disable key expiry** (HA shows this as "OK" with a check icon, since `device_class: problem`). |
 
 ### Text sensors (diagnostic)
 
@@ -292,7 +292,7 @@ All entities are created automatically when you include the package.
 | **Tailscale Memory** | Reports `PSRAM <size>KB` or `Internal RAM` so you can confirm PSRAM was detected. |
 | **Tailscale Setup Hint** | Human-readable next-action hint, e.g. `wifi use_address: 100.x.y.z`. Use this in a HA automation to remind yourself after first flash. |
 | **Tailscale Peer Status** | `OK` / `Warning` / `Full` based on how close you are to the `max_peers` limit. |
-| **Tailscale Key Expiry** | ISO-8601 timestamp of the node's key expiry (device_class: `timestamp`). Empty/unknown once you disable key expiry on the node — see the **Tailscale Key Expiry Warning** binary sensor for the simple on/off view. |
+| **Tailscale Key Expiry** | ISO-8601 timestamp of the node's key expiry (`device_class: timestamp`). Once you disable key expiry on the node it becomes empty — HA renders that as **Unknown**, which is the correct state for a timestamp that no longer applies. See the **Tailscale Key Expiry Warning** binary sensor for the simple on/off view. |
 | **HA Connection Route** | How the *currently-connected* HA instance is reaching the device: `Tailscale Direct`, `Tailscale DERP`, `Local`, or `Unknown`. Updates live. |
 
 ### Sensors
