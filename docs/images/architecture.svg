@@ -39,7 +39,7 @@
   <!-- ESP32 (left) -->
   <g transform="translate(180, 380)">
     <rect x="-120" y="-90" width="240" height="180" rx="10" fill="#1a3a5c" stroke="#2ea8d8" stroke-width="2"/>
-    <text x="0" y="-62" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="700" fill="#00b4d8" text-anchor="middle">ESP32-S3</text>
+    <text x="0" y="-62" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="700" fill="#00b4d8" text-anchor="middle">ESP32</text>
     <line x1="-100" y1="-48" x2="100" y2="-48" stroke="#2ea8d8" stroke-width="1" opacity="0.5"/>
     <text x="0" y="-28" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">ESPHome · ESP-IDF</text>
     <text x="0" y="-8" font-family="'Consolas', monospace" font-size="13" fill="#e0e0e0" text-anchor="middle">microlink (Tailscale)</text>
