@@ -476,7 +476,7 @@ This component uses microlink, a userspace WireGuard stack. There is no kernel T
 | ------------------------ | --------- | ----- |
 | Join tailnet as leaf     | Yes       | This is the node's role. |
 | `accept_routes`          | Yes       | Off by default. |
-| Custom `login_server`    | Auth+register verified | Headscale 0.23.0 completes Noise handshake, `/machine/register`, and the initial `/machine/map`. The MapResponse long-poll does not yet stay open, so the node re-auths on a 60 s cycle and Headscale reports it offline between cycles. See *Custom control plane (Headscale)* below. |
+| Custom `login_server`    | Yes       | Headscale 0.23.0 verified end-to-end: Noise handshake, `/machine/register`, and the streaming MapResponse long-poll all work. See *Custom control plane (Headscale)* below. |
 | Advertise subnet routes  | No        | The ESP cannot be a subnet router. |
 | Exit node (use or offer) | No        | Neither direction is implemented. |
 | Netfilter / ACL rules    | No        | There is no OS-level firewall to hook into. |
@@ -485,7 +485,7 @@ If your architecture requires the ESP to route traffic on behalf of other device
 
 ### Custom control plane (Headscale)
 
-> **TL;DR:** `login_server` now supports Headscale for authentication and initial registration. The device completes the Noise handshake, registers, and gets a tailnet IP. The MapResponse long-poll that keeps the node "online" is still flaky, so Headscale reports the node as offline between periodic re-auths. Fine for testing and provisioning; use Tailscale SaaS for production always-on deployments.
+> **TL;DR:** `login_server` supports Headscale end-to-end. The device completes the Noise handshake, registers, gets a tailnet IP, and stays online via the streaming MapResponse long-poll. Verified against Headscale 0.23.0.
 
 By default the component registers against the official Tailscale SaaS coordinator at `controlplane.tailscale.com`. That is the recommended production path.
 
@@ -511,11 +511,7 @@ Accepted forms:
 - `host:port` parsing and HTTP `Host:` / HTTP/2 `:authority` header construction.
 - Noise server public key is fetched at setup time from the Tailscale-compatible `/key?v=88` HTTP endpoint and passed into `ml_noise_init`, so the IK handshake completes against a Headscale-generated keypair.
 - `/machine/register` over HTTP/2 — the node receives its tailnet IP from Headscale and appears in `headscale nodes list` (typically `100.64.0.1` on a fresh install).
-- The initial `/machine/map` response.
-
-**Current caveat — MapResponse long-poll:**
-
-The node-map long-poll does not yet stay open against Headscale, so the device re-authenticates on a ~60 second cycle. Between cycles Headscale marks the node as offline, which means you can register and reach `CONNECTED` state momentarily but an always-on VPN endpoint is not yet reliable. This is a microlink-side higher-protocol issue (not plumbing or crypto) and is tracked for a follow-up release. Tailscale SaaS is unaffected and remains the recommended production target.
+- The streaming `/machine/map` long-poll stays open and delivers delta `MapResponse` chunks in response to each periodic endpoint update, so the node stays "online" in Headscale between STUN re-probes.
 
 **One more thing to watch for:**
 

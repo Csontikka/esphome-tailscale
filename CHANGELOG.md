@@ -56,11 +56,10 @@ new empty `[Unreleased]` section added above it.
   reaches microlink via a new public `ctrl_host` field on
   `microlink_config_t` (vendored microlink fork change); config-
   supplied values take priority over the NVS-persisted override
-  microlink already supported. Authentication and node registration
-  against a Headscale 0.23.0 instance are verified end-to-end (see
-  *Confirmed working* below). Tailscale SaaS remains the default and
-  is still the fully-tested path; Headscale has a known limitation
-  with the MapResponse long-poll documented under *Known limitations*.
+  microlink already supported. Authentication, node registration, and
+  the streaming MapResponse long-poll against a Headscale 0.23.0 instance
+  are verified end-to-end (see *Confirmed working* below). Tailscale
+  SaaS remains the default.
 - **`contrib/headscale-test/`** — docker-compose harness, minimal
   `config.yaml`, and step-by-step README for standing up a local
   Headscale instance against which the component's auth and register
@@ -314,8 +313,8 @@ new empty `[Unreleased]` section added above it.
   it against the WiFi component's `use_address`.
 - **Stale "Headscale is not supported" disclaimers** throughout the
   README have been removed in favor of the new Headscale section
-  that describes the verified auth+register path and the long-poll
-  caveat honestly.
+  that describes the verified end-to-end auth, register, and
+  streaming long-poll paths.
 - **SonarCloud integration** — workflow file, `sonar-project.properties`,
   README badges, and the `SONAR_TOKEN` repo secret. Replaced by GitHub's
   native CodeQL static analysis.
@@ -356,20 +355,6 @@ verified. Treat them as the honest answer to "can I rely on this for X?"
   variants (classic ESP32, C3, C6, P4) may work via microlink, but are
   not tested by this project. If you try it on a different chip, please
   open an issue with your results.
-- **Headscale MapResponse long-poll not yet stable.** Noise
-  handshake, `/machine/register`, and initial `/machine/map` all
-  succeed end-to-end against Headscale 0.23.0 — the node shows up in
-  `headscale nodes list` with a tailnet IP after the very first
-  registration. But the long-poll that keeps the node "online" does
-  not stay open, so the device re-authenticates and re-registers on
-  roughly a 60-second cycle, and Headscale reports the node as
-  offline between cycles. This is a higher-layer microlink issue
-  (MapResponse stream handling against Headscale's implementation),
-  not a plumbing or crypto-layer problem, and is tracked separately.
-  For basic CI-style provisioning against Headscale the current
-  state is usable; for a live always-on Headscale deployment,
-  Tailscale SaaS remains the recommended target until the long-poll
-  issue is fixed.
 - **Node-key auto-renewal at 180 days is not yet verified.** The
   component exposes the current expiry timestamp via the `key_expiry`
   sensor and warns via `key_expiry_warning`, but whether microlink
@@ -387,14 +372,15 @@ verified. Treat them as the honest answer to "can I rely on this for X?"
 - **OTA updates over the Tailscale IP** — flashing the device via its
   `100.x.x.x` tailnet address (while the LAN path is unavailable) has
   been verified end-to-end.
-- **Headscale authentication and initial registration.** Against a
-  local Headscale 0.23.0 instance (see `contrib/headscale-test/`),
-  the device completes the Noise IK handshake, registers via
-  `/machine/register`, and receives an initial map response with a
-  tailnet IP. Verified with both bare-IP (`login_server:
-  "192.168.1.157"`) and URL (`login_server: "http://192.168.1.157:80"`)
-  forms. `headscale nodes list` shows the node present with IP
-  `100.64.0.1`. See *Known limitations* for the long-poll caveat.
+- **Headscale authentication, registration, and streaming long-poll.**
+  Against a local Headscale 0.23.0 instance (see `contrib/headscale-test/`
+  and the Proxmox dev LXC), the device completes the Noise IK handshake,
+  registers via `/machine/register`, and the streaming `/machine/map`
+  long-poll on HTTP/2 stream 5 stays open and delivers delta
+  `MapResponse` chunks on every periodic endpoint update. Verified with
+  both bare-IP (`login_server: "192.168.1.157"`) and URL
+  (`login_server: "http://192.168.1.157:80"`) forms. `headscale nodes list`
+  shows the node present with IP `100.64.0.1` and online.
 
 ---
 
