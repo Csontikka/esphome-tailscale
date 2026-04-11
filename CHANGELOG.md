@@ -48,21 +48,28 @@ new empty `[Unreleased]` section added above it.
   peer counts by type (direct vs DERP), heap, PSRAM, uptime.
 - **SNTP time sync** included in the package so key-expiry timestamps render
   correctly in Home Assistant.
-- **Custom control-plane support via `login_server`** — the YAML option
+- **Custom control-plane plumbing via `login_server`** — the YAML option
   is now actually wired through to microlink's control-plane selection
   (it was a no-op in earlier iterations). Empty keeps the default
-  Tailscale SaaS coordinator; setting a URL such as
-  `http://192.168.1.42:8080` points the node at a Headscale or other
-  self-hosted coordinator instead. The ESPHome setter reaches microlink
-  via a new public `ctrl_host` field on `microlink_config_t` (vendored
-  microlink fork change); config-supplied values take priority over the
-  NVS-persisted override microlink already supported. Headscale support
-  is best-effort, Tailscale SaaS remains the tested path.
+  Tailscale SaaS coordinator; setting a value points the node at a
+  different control-plane host instead. The ESPHome setter reaches
+  microlink via a new public `ctrl_host` field on `microlink_config_t`
+  (vendored microlink fork change); config-supplied values take
+  priority over the NVS-persisted override microlink already supported.
+  **Important:** this is a *plumbing* change, not a working Headscale
+  client. `ctrl_host` must currently be a bare hostname or IP — the
+  microlink TCP path is hardcoded to port 80, and microlink's Noise
+  handshake is hardcoded to Tailscale SaaS's Noise server public key
+  (`ml_noise.c:232`), so connecting to Headscale produces a
+  `chacha20poly1305: message authentication failed` at the
+  `NoiseUpgradeHandler`. See *Known limitations* below for the full
+  picture. Tailscale SaaS remains the only tested-to-completion path.
 - **`contrib/headscale-test/`** — docker-compose harness, minimal
   `config.yaml`, and step-by-step README for standing up a local
-  Headscale instance to verify `login_server` end-to-end. Intentionally
-  not shipped via `packages:`; exists only so contributors can
-  reproduce the test environment without hunting for Headscale docs.
+  Headscale instance. Currently only useful for reproducing the Noise
+  key-mismatch described above; kept in-tree so future work on dynamic
+  server-key fetch has a reference environment. Not shipped via
+  `packages:`.
 - **Packages-based distribution** — end users can drop a one-line
   `packages:` import into their YAML (see `example.yaml`) instead of hand-
   wiring every entity.
@@ -226,13 +233,20 @@ verified. Treat them as the honest answer to "can I rely on this for X?"
   variants (classic ESP32, C3, C6, P4) may work via microlink, but are
   not tested by this project. If you try it on a different chip, please
   open an issue with your results.
-- **Headscale is best-effort, not first-class.** Only the official
-  Tailscale SaaS control plane is actively tested on every change. The
-  `login_server` YAML option does reach microlink's control-plane
-  selection (since this release) and a local test harness lives in
-  `contrib/headscale-test/`, but we cannot promise feature parity with
-  Tailscale SaaS, and bug reports against Headscale will first be
-  verified against Tailscale SaaS before any investigation.
+- **Headscale does not work end-to-end.** The `login_server` YAML
+  option is now plumbed through to microlink, and the `contrib/
+  headscale-test/` harness can verify that layer: the ESP resolves,
+  TCP-connects, sends the HTTP/1.1 Upgrade request, and Headscale's
+  `NoiseUpgradeHandler` processes it. But the Noise IK handshake fails
+  with `chacha20poly1305: message authentication failed` because
+  microlink's `ml_noise_init` hardcodes Tailscale SaaS's Noise server
+  public key (`ml_noise.c:232`) and does not fetch the peer's pubkey
+  from the Headscale-compatible `/key?v=2` endpoint. The client also
+  hardcodes TCP port 80 for the control connection (`ml_coord.c:230`),
+  so non-standard ports require host-side port remapping. Making
+  Headscale actually work requires a microlink feature — dynamic
+  server-pubkey fetch and host:port parsing — that is out of scope for
+  this release. Only Tailscale SaaS is a supported target.
 - **Node-key auto-renewal at 180 days is not yet verified.** The
   component exposes the current expiry timestamp via the `key_expiry`
   sensor and warns via `key_expiry_warning`, but whether microlink

@@ -339,7 +339,7 @@ tailscale:
 | `auth_key` | *(required)* | Tailscale auth key (`tskey-auth-...`). Use `!secret`. |
 | `hostname` | `""` | Name the node registers as. Empty → Tailscale picks one. |
 | `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes *and* you have PSRAM. |
-| `login_server` | `""` | Custom control-plane URL. Empty uses the official Tailscale SaaS coordinator. Set to a Headscale or other self-hosted coordinator URL (e.g., `http://192.168.1.42:8080`) to use it instead. See *Custom control plane (Headscale)* under Deployment Notes. |
+| `login_server` | `""` | Custom control-plane host. Empty uses the official Tailscale SaaS coordinator. A bare hostname or IP (e.g., `192.168.1.42`) points the plumbing at a different control plane, but this **does not yet work end-to-end with Headscale** — the Noise handshake fails because microlink hardcodes Tailscale SaaS's Noise server pubkey. Leave empty for production. See *Custom control plane (Headscale)* under Deployment Notes for the full explanation. |
 
 > **No `update_interval`.** The component is fully event-driven: sensors publish only when the underlying state actually changes. There is no polling loop to tune — and nothing to reduce CPU/network cost by raising.
 
@@ -476,36 +476,43 @@ This component uses microlink, a userspace WireGuard stack. There is no kernel T
 | ------------------------ | --------- | ----- |
 | Join tailnet as leaf     | Yes       | This is the node's role. |
 | `accept_routes`          | Yes       | Off by default. |
-| Custom `login_server`    | Yes       | Tailscale SaaS is the tested default. Headscale and other self-hosted coordinators are best-effort — see *Custom control plane (Headscale)* below. |
+| Custom `login_server`    | Plumbing only | The config reaches microlink; DNS / TCP / HTTP Upgrade all work against a Headscale harness. The Noise handshake then fails because microlink hardcodes Tailscale SaaS's server pubkey. Don't use in production — see *Custom control plane (Headscale)* below. |
 | Advertise subnet routes  | No        | The ESP cannot be a subnet router. |
 | Exit node (use or offer) | No        | Neither direction is implemented. |
 | Netfilter / ACL rules    | No        | There is no OS-level firewall to hook into. |
 
 If your architecture requires the ESP to route traffic on behalf of other devices, it won't. Place a Linux subnet router alongside it and keep the ESP as a pure endpoint — that is the supported topology.
 
-### Custom control plane (Headscale)
+### Custom control plane (Headscale) — plumbing only, not working end-to-end
 
-By default the component registers against the official Tailscale SaaS coordinator at `controlplane.tailscale.com`. That path is the one we actively test and is the recommended configuration for production devices.
+> **TL;DR:** The `login_server` option is wired through to microlink, but **Headscale does not currently work as a full VPN endpoint** with this component. The Noise handshake fails at the crypto layer because microlink hardcodes Tailscale SaaS's Noise server public key. Use Tailscale SaaS if you want the device on a tailnet.
 
-The `login_server` YAML option points the node at a different coordinator URL. This is the escape hatch for people running [Headscale](https://github.com/juanfont/headscale) or another Tailscale-compatible control plane. Set it to the full URL the coordinator serves its API on, for example:
+By default the component registers against the official Tailscale SaaS coordinator at `controlplane.tailscale.com`. That path is the one we actively test and the only one that reaches `CONNECTED` with a VPN IP.
+
+The `login_server` YAML option replaces the control-plane host microlink talks to. It exists so that the contrib test harness can verify the plumbing end-to-end, and so the groundwork is in place for a future microlink change that would add real Headscale support. Today the pipeline looks like this:
 
 ```yaml
 tailscale:
-  auth_key: !secret tailscale_auth_key
+  auth_key: "<preauth key from headscale>"
   hostname: "esp32-tailscale"
-  login_server: "http://192.168.1.42:8080"
+  login_server: "192.168.1.42"  # bare hostname / IP only, no scheme, no port
 ```
 
-The URL is passed through to the underlying microlink stack at init time; at boot you should see a log line like `Control plane from config: http://192.168.1.42:8080` immediately before microlink starts talking to the coordinator. If you do not set `login_server`, you will not see that line and the node will use the SaaS default.
+**What actually works with `login_server` today:**
 
-A few practical notes when pairing this with a Headscale instance:
+- YAML → `tailscale.cpp` setter → `microlink_config_t.ctrl_host` → `ml->ctrl_host` → used in place of `controlplane.tailscale.com`.
+- DNS resolution, TCP connect, and the HTTP/1.1 Upgrade request against a Headscale instance running on the same machine (the test harness reaches Headscale's `NoiseUpgradeHandler`).
+- The `Login Server: <host>` line in `dump_config` and the `Control plane from config: <host>` line in boot logs.
 
-- **Use the coordinator's LAN IP, not `localhost`.** The ESP cannot reach `localhost` on your workstation — use the IP that is visible to the ESP from its WiFi network, the same address Headscale's `server_url` is configured with.
-- **Plain HTTP works for testing.** The microlink stack accepts `http://` URLs, which is convenient for a local LAN-only Headscale without TLS. Do not run an HTTP-only Headscale on the public internet.
+**What does not work, and why:**
+
+- **Port is hardcoded.** The microlink TCP path uses port 80 unconditionally (`ml_coord.c:230`). `ctrl_host` must be a bare hostname or IP — scheme and `:port` are not parsed. To reach Headscale on a non-standard port you have to remap it on the host (the contrib harness binds the container's 80 to the host's 80).
+- **Noise server pubkey is hardcoded to Tailscale SaaS.** `ml_noise_init` falls back to `TAILSCALE_SERVER_PUBLIC_KEY` when no remote pubkey is passed (`ml_noise.c:232`). Headscale generates its own Noise keypair per install, so the IK handshake always fails with `chacha20poly1305: message authentication failed` on the Headscale side and `Failed to read Noise msg2 header` on the device. The ESP never gets a VPN IP from Headscale.
 - **Auth keys come from the coordinator that issues them.** A Tailscale SaaS `tskey-auth-...` will not work against Headscale, and vice versa. Generate the key on the same coordinator you will connect to.
-- **We do not provide first-class Headscale support.** It is best-effort compatibility through microlink; if something is broken we will accept bug reports but our first question will be whether the same YAML also fails against Tailscale SaaS, since that is what we test against on every change.
 
-For a fully working local-testbed example — docker-compose, a minimal `config.yaml`, and the CLI commands to create a user and preauth key — see [`contrib/headscale-test/README.md`](contrib/headscale-test/README.md). That directory is intentionally not shipped via the `packages:` distribution — it exists only so contributors can reproduce the test environment without hunting for Headscale docs.
+Making Headscale work as a real endpoint requires a microlink change: fetch the server's Noise pubkey from the Tailscale-compatible `/key?v=2` endpoint at setup time, then pass it into `ml_noise_init` instead of the hardcoded default. That change is tracked for a future release and is out of scope here.
+
+For the full reproduction — docker-compose, a minimal `config.yaml`, and the CLI commands to create a user and preauth key — see [`contrib/headscale-test/README.md`](contrib/headscale-test/README.md). That directory is intentionally not shipped via the `packages:` distribution — it exists so contributors can reproduce the exact state described above and use it as a reference environment when working on the microlink-side fix.
 
 ### Auth key and node key expiry
 
@@ -701,7 +708,7 @@ esphome-tailscale/
 │   ├── mask_screenshots.py     # Redacts sensitive info from screenshots
 │   └── svg_to_png.py           # Converts SVG diagrams to PNG for the docs
 ├── contrib/
-│   └── headscale-test/         # Local Headscale docker-compose for testing login_server end-to-end
+│   └── headscale-test/         # Local Headscale docker-compose for reproducing the login_server Noise-key limitation
 ├── microlink/                 # Vendored copy of the Tailscale protocol implementation
 ├── example.yaml               # End-user reference config that uses the GitHub package
 ├── example-dev.yaml           # Development config using the local checkout and inline entities

@@ -2,8 +2,12 @@
 # Minimal Headscale config for local ESPHome Tailscale component testing.
 # This is NOT a production config. Do not expose port 8080 to the public internet.
 
-server_url: http://HOST_LAN_IP:8080
-listen_addr: 0.0.0.0:8080
+# NOTE: port 80 is not arbitrary — microlink hardcodes TCP 80 for the
+# control plane (see microlink/components/microlink/src/ml_coord.c:230),
+# so this harness must listen there for the Upgrade request to reach the
+# Noise handler. Nothing else on the host may be holding port 80.
+server_url: http://HOST_LAN_IP
+listen_addr: 0.0.0.0:80
 metrics_listen_addr: 0.0.0.0:9090
 
 grpc_listen_addr: 0.0.0.0:50443

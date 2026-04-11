@@ -5,7 +5,9 @@ services:
     restart: unless-stopped
     command: serve
     ports:
-      - "8080:8080"
+      # Port 80 is not a typo — microlink hardcodes TCP 80 for the control
+      # plane (ml_coord.c:230), so the host side must also bind 80 to match.
+      - "80:80"
       - "9090:9090"
     volumes:
       - ./config:/etc/headscale
