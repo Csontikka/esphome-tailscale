@@ -47,6 +47,12 @@ class TailscaleComponent : public Component {
   void set_key_expiry_warning_binary_sensor(binary_sensor::BinarySensor *sensor) {
     this->key_expiry_warning_sensor_ = sensor;
   }
+  void set_ha_connected_binary_sensor(binary_sensor::BinarySensor *sensor) {
+    this->ha_connected_sensor_ = sensor;
+  }
+  void set_vpn_auto_rollback_binary_sensor(binary_sensor::BinarySensor *sensor) {
+    this->vpn_auto_rollback_sensor_ = sensor;
+  }
 #endif
 #ifdef USE_TEXT_SENSOR
   void set_ip_address_text_sensor(text_sensor::TextSensor *sensor) {
@@ -82,6 +88,12 @@ class TailscaleComponent : public Component {
   void set_ha_connection_ip_text_sensor(text_sensor::TextSensor *sensor) {
     this->ha_ip_sensor_ = sensor;
   }
+  void set_control_plane_text_sensor(text_sensor::TextSensor *sensor) {
+    this->control_plane_sensor_ = sensor;
+  }
+  void set_login_server_text_sensor(text_sensor::TextSensor *sensor) {
+    this->login_server_sensor_ = sensor;
+  }
 #endif
 #ifdef USE_SWITCH
   void set_enable_switch(switch_::Switch *sw) { this->enable_switch_ = sw; }
@@ -93,6 +105,7 @@ class TailscaleComponent : public Component {
   void set_peers_derp_sensor(sensor::Sensor *sensor) { this->peers_derp_sensor_ = sensor; }
   void set_peers_max_sensor(sensor::Sensor *sensor) { this->peers_max_sensor_ = sensor; }
   void set_uptime_sensor(sensor::Sensor *sensor) { this->uptime_sensor_ = sensor; }
+  void set_connections_sensor(sensor::Sensor *sensor) { this->connections_sensor_ = sensor; }
 #endif
 
   bool is_connected() const;
@@ -129,6 +142,9 @@ class TailscaleComponent : public Component {
   std::string vpn_ip_str_;
   std::string tailnet_name_;
   uint32_t connected_since_ms_{0};
+  uint32_t connection_count_{0};
+  uint32_t last_sensor_publish_ms_{0};
+  std::atomic<bool> vpn_stopping_{false};
 
   // Reconnect state machine
   enum ReconnectPhase : uint8_t { RECONNECT_IDLE, RECONNECT_REBIND, RECONNECT_FULL, RECONNECT_REBOOT };
@@ -144,6 +160,8 @@ class TailscaleComponent : public Component {
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
   binary_sensor::BinarySensor *key_expiry_warning_sensor_{nullptr};
+  binary_sensor::BinarySensor *ha_connected_sensor_{nullptr};
+  binary_sensor::BinarySensor *vpn_auto_rollback_sensor_{nullptr};
 #endif
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *ip_address_sensor_{nullptr};
@@ -157,6 +175,8 @@ class TailscaleComponent : public Component {
   text_sensor::TextSensor *key_expiry_sensor_{nullptr};
   text_sensor::TextSensor *ha_route_sensor_{nullptr};
   text_sensor::TextSensor *ha_ip_sensor_{nullptr};
+  text_sensor::TextSensor *control_plane_sensor_{nullptr};
+  text_sensor::TextSensor *login_server_sensor_{nullptr};
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *peers_total_sensor_{nullptr};
@@ -165,6 +185,7 @@ class TailscaleComponent : public Component {
   sensor::Sensor *peers_derp_sensor_{nullptr};
   sensor::Sensor *peers_max_sensor_{nullptr};
   sensor::Sensor *uptime_sensor_{nullptr};
+  sensor::Sensor *connections_sensor_{nullptr};
 #endif
 #ifdef USE_SWITCH
   switch_::Switch *enable_switch_{nullptr};

@@ -57,55 +57,67 @@ time:
 binary_sensor:
   - platform: tailscale
     connected:
-      name: "Tailscale Connected"
+      name: "VPN Connected"
     key_expiry_warning:
-      name: "Tailscale Key Expiry Warning"
+      name: "VPN Key Expiry Warning"
+    ha_connected:
+      name: "HA API Connected"
+    vpn_auto_rollback:
+      name: "VPN Auto-Rollback"
 
 text_sensor:
   - platform: tailscale
     ip_address:
-      name: "Tailscale IP"
-    tailscale_hostname:
-      name: "Tailscale Hostname"
+      name: "VPN IP"
+    vpn_hostname:
+      name: "VPN Hostname"
     memory_mode:
-      name: "Tailscale Memory"
+      name: "Device Memory"
     setup_status:
-      name: "Tailscale Setup Hint"
+      name: "VPN Setup Hint"
     peer_status:
-      name: "Tailscale Peer Status"
+      name: "VPN Peer Status"
     magicdns:
-      name: "Tailscale MagicDNS"
-    tailnet_name:
-      name: "Tailscale Tailnet"
+      name: "VPN MagicDNS"
+    network_name:
+      name: "VPN Network"
     key_expiry:
-      name: "Tailscale Key Expiry"
+      name: "VPN Key Expiry"
     ha_connection_route:
-      name: "HA Connection Route"
+      name: "HA API Connection Route"
+    ha_connection_ip:
+      name: "HA API Connection IP"
+    control_plane:
+      name: "VPN Control Plane"
+    login_server:
+      name: "VPN Login Server"
 
 button:
   - platform: tailscale
     reconnect:
-      name: "Tailscale Reconnect"
+      name: "VPN Reconnect"
   - platform: restart
     name: "Reboot"
 
 sensor:
   - platform: tailscale
     peers_online:
-      name: "Tailscale Peers Online"
+      name: "VPN Peers Online"
     peers_direct:
-      name: "Tailscale Peers Direct"
+      name: "VPN Peers Direct"
     peers_derp:
-      name: "Tailscale Peers DERP"
+      name: "VPN Peers DERP"
     peers_max:
-      name: "Tailscale Peers Max"
+      name: "VPN Peers Max"
     uptime:
-      name: "Tailscale Uptime"
+      name: "VPN Uptime"
+    connections:
+      name: "VPN Connect Count"
 
 switch:
   - platform: tailscale
-    tailscale_enabled:
-      name: "Tailscale Enabled"
+    vpn_enabled:
+      name: "VPN Enabled"
 
 tailscale:
   auth_key: !secret tailscale_auth_key
@@ -128,16 +140,11 @@ logger:
   # invariants break. 921600 baud = 8x throughput, enough headroom to
   # keep the logger non-blocking even during peer-setup log bursts.
   baud_rate: 921600
-  # Required when web_server is enabled: ESPHome's non-main-thread log
-  # buffer (TaskLogBuffer) hits a `prvSendItemDoneNoSplit` ringbuf assert
-  # at ~50s uptime in `xRingbufferSendComplete` when microlink's high-rate
-  # esp_log calls from ml_derp_tx_task / ml_wg_mgr race with the web_server
-  # /events SSE log subscriber. Setting this to 0 disables TaskLogBuffer
-  # entirely (esp_log routes straight to UART) and eliminates the crash.
-  # Trade-off: non-main-thread logs don't reach the HA API / web_server
-  # /events streams — UART remains the source of truth for those logs.
-  # Verified 372s clean @ 2026-04-11 with full WG traffic + web_server :80.
-  task_log_buffer_size: 0
+  # TaskLogBuffer left at default (768). The prvSendItemDoneNoSplit assert
+  # that previously crashed at ~50s with web_server enabled was resolved by
+  # commit a881549 (wg_mgr→CPU0, DISCO key cache, throttled peer ingest).
+  # Verified 2x clean (200s + 300s) with 2 SSE subscribers + browser + full
+  # WG traffic @ 2026-04-12.
   hardware_uart: UART0
   logs:
     ml_coord: INFO
@@ -150,7 +157,8 @@ logger:
 
 api:
 
-# Requires logger.task_log_buffer_size: 0 above — see comment there.
+# Previously required task_log_buffer_size: 0 workaround — no longer needed
+# after commit a881549 resolved the timing race. Verified clean 2026-04-12.
 web_server:
   port: 80
 

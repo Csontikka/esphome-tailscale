@@ -19,6 +19,19 @@ namespace esphome {
 namespace tailscale {
 
 static const char *const TAG = "tailscale";
+static std::atomic<bool> s_vpn_stopping{false};
+static std::atomic<microlink_t *> s_active_ml{nullptr};
+static std::atomic<bool> s_stop_in_progress{false};
+
+static void microlink_stop_task(void *arg) {
+  auto *ml = static_cast<microlink_t *>(arg);
+  microlink_stop(ml);
+  vTaskDelay(pdMS_TO_TICKS(5000));
+  microlink_destroy(ml);
+  s_stop_in_progress.store(false);
+  ESP_LOGI(TAG, "Microlink cleanup complete");
+  vTaskDelete(nullptr);
+}
 
 void TailscaleComponent::setup() {
   ESP_LOGI(TAG, "Initializing Tailscale (MicroLink)...");
@@ -39,6 +52,11 @@ void TailscaleComponent::setup() {
 void TailscaleComponent::start_microlink_() {
   if (this->ml_ != nullptr)
     return;  // Already started
+  if (s_stop_in_progress.load()) {
+    ESP_LOGD(TAG, "Waiting for previous instance cleanup...");
+    return;
+  }
+  s_vpn_stopping.store(false);
 
   microlink_config_t config = {};
   config.auth_key = this->auth_key_.c_str();
@@ -69,6 +87,7 @@ void TailscaleComponent::start_microlink_() {
     return;
   }
 
+  s_active_ml.store(this->ml_);
   microlink_set_state_callback(this->ml_, TailscaleComponent::state_callback, this);
   microlink_set_peer_callback(this->ml_, TailscaleComponent::peer_callback, this);
 
@@ -84,8 +103,10 @@ void TailscaleComponent::start_microlink_() {
 
 void TailscaleComponent::loop() {
   // Start microlink only after WiFi is connected (and user hasn't disabled)
-  if (this->ml_ == nullptr && this->tailscale_user_enabled_ && wifi::global_wifi_component->is_connected()) {
-    this->start_microlink_();
+  if (this->ml_ == nullptr && wifi::global_wifi_component->is_connected()) {
+    if (this->tailscale_user_enabled_ && !this->vpn_stopping_) {
+      this->start_microlink_();
+    }
   }
 
   // Auto-confirm rollback after 30s if HA API is still connected (proof HA can see us)
@@ -109,9 +130,13 @@ void TailscaleComponent::loop() {
     }
 #endif
     if (!this->tailscale_user_enabled_ && this->ml_ != nullptr) {
-      microlink_stop(this->ml_);
-      microlink_destroy(this->ml_);
+      s_active_ml.store(nullptr);
+      microlink_set_state_callback(this->ml_, nullptr, nullptr);
+      microlink_set_peer_callback(this->ml_, nullptr, nullptr);
+      microlink_t *old_ml = this->ml_;
       this->ml_ = nullptr;
+      s_stop_in_progress.store(true);
+      xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
     }
     this->state_changed_ = true;
   }
@@ -119,6 +144,15 @@ void TailscaleComponent::loop() {
   if (this->state_changed_) {
     this->state_changed_ = false;
     this->publish_state_();
+  }
+
+  // Periodic sensor refresh (uptime, peer counts, HA route)
+  if (this->ml_ != nullptr && this->is_connected()) {
+    uint32_t now = millis();
+    if (now - this->last_sensor_publish_ms_ >= 5000) {
+      this->last_sensor_publish_ms_ = now;
+      this->publish_state_();
+    }
   }
 
   // Try sending IP notification once HA API is connected
@@ -173,9 +207,13 @@ void TailscaleComponent::loop() {
           this->reconnect_phase_ = RECONNECT_IDLE;
         } else if (elapsed > 15000) {
           ESP_LOGW(TAG, "Reconnect: rebind failed after 15s, trying full restart...");
-          microlink_stop(this->ml_);
-          microlink_destroy(this->ml_);
+          s_active_ml.store(nullptr);
+          microlink_set_state_callback(this->ml_, nullptr, nullptr);
+          microlink_set_peer_callback(this->ml_, nullptr, nullptr);
+          microlink_t *old_ml = this->ml_;
           this->ml_ = nullptr;
+          s_stop_in_progress.store(true);
+          xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
           this->reconnect_phase_ = RECONNECT_FULL;
           this->reconnect_start_ms_ = millis();
           // Will re-init in next loop() via start_microlink_()
@@ -209,6 +247,8 @@ void TailscaleComponent::dump_config() {
 void TailscaleComponent::on_shutdown() {
   if (this->ml_ != nullptr) {
     ESP_LOGI(TAG, "Shutting down Tailscale...");
+    s_active_ml.store(nullptr);
+    s_vpn_stopping.store(true);
     microlink_stop(this->ml_);
     microlink_destroy(this->ml_);
     this->ml_ = nullptr;
@@ -237,6 +277,7 @@ int TailscaleComponent::get_peer_count() const {
 }
 
 void TailscaleComponent::state_callback(microlink_t *ml, microlink_state_t state, void *user_data) {
+  if (ml != s_active_ml.load() || s_vpn_stopping.load()) return;
   auto *self = static_cast<TailscaleComponent *>(user_data);
   self->current_state_ = state;
   self->state_changed_ = true;
@@ -249,6 +290,7 @@ void TailscaleComponent::state_callback(microlink_t *ml, microlink_state_t state
   ESP_LOGI(TAG, "State: %s", name);
 
   if (state == ML_STATE_CONNECTED) {
+    self->connection_count_++;
     self->connected_since_ms_ = millis();
     uint32_t ip = microlink_get_vpn_ip(ml);
     char ip_str[16];
@@ -265,6 +307,7 @@ void TailscaleComponent::state_callback(microlink_t *ml, microlink_state_t state
 
 void TailscaleComponent::peer_callback(microlink_t *ml, const microlink_peer_info_t *peer,
                                         void *user_data) {
+  if (ml != s_active_ml.load()) return;
   char ip_str[16];
   microlink_ip_to_str(peer->vpn_ip, ip_str);
   ESP_LOGI(TAG, "Peer: %s (%s) online=%d direct=%d",
@@ -278,9 +321,58 @@ void TailscaleComponent::publish_state_() {
   if (this->connected_sensor_ != nullptr && this->connected_sensor_->state != connected) {
     this->connected_sensor_->publish_state(connected);
   }
+  if (!connected && this->key_expiry_warning_sensor_ != nullptr && this->key_expiry_warning_sensor_->has_state()) {
+    this->key_expiry_warning_sensor_->invalidate_state();
+  }
+  {
+    bool api_alive = false;
+#ifdef USE_API
+    api_alive = api::global_api_server != nullptr && api::global_api_server->is_connected();
+    if (api_alive && this->vpn_stopping_) {
+      std::string route = this->detect_ha_route_();
+      if (route.find("Tailscale") != std::string::npos) {
+        api_alive = false;
+      }
+    }
+#endif
+    if (this->ha_connected_sensor_ != nullptr && this->ha_connected_sensor_->state != api_alive) {
+      this->ha_connected_sensor_->publish_state(api_alive);
+    }
+    if (this->vpn_auto_rollback_sensor_ != nullptr) {
+      bool would_rollback = this->enable_rollback_pending_;
+      if (!would_rollback && api_alive && connected) {
+        std::string route = this->detect_ha_route_();
+        would_rollback = route.find("Tailscale") != std::string::npos;
+      }
+      if (this->vpn_auto_rollback_sensor_->state != would_rollback) {
+        this->vpn_auto_rollback_sensor_->publish_state(would_rollback);
+      }
+    }
+  }
 #endif
 
 #ifdef USE_TEXT_SENSOR
+  // Clear dynamic sensors when disconnected — publish empty + reset has_state_
+  // so HA shows "Unknown" instead of blank.
+  if (!connected) {
+    auto unknown_text = [](text_sensor::TextSensor *s) {
+      if (s == nullptr || !s->has_state()) return;
+      s->publish_state("");
+      s->set_has_state(false);
+    };
+    unknown_text(this->ip_address_sensor_);
+    unknown_text(this->hostname_sensor_);
+    unknown_text(this->magicdns_sensor_);
+    unknown_text(this->tailnet_name_sensor_);
+    unknown_text(this->key_expiry_sensor_);
+    unknown_text(this->peer_list_sensor_);
+    unknown_text(this->peer_status_sensor_);
+    if (this->setup_status_sensor_ != nullptr &&
+        this->setup_status_sensor_->state != "Waiting for VPN...") {
+      this->setup_status_sensor_->publish_state("Waiting for VPN...");
+    }
+    this->tailnet_name_.clear();
+  } else {
   std::string vpn_ip = this->get_vpn_ip();
   if (this->ip_address_sensor_ != nullptr && this->ip_address_sensor_->state != vpn_ip) {
     this->ip_address_sensor_->publish_state(vpn_ip);
@@ -291,7 +383,7 @@ void TailscaleComponent::publish_state_() {
   if (this->setup_status_sensor_ != nullptr) {
     std::string hint;
     if (vpn_ip.empty()) {
-      hint = "Waiting for Tailscale...";
+      hint = "Waiting for VPN...";
     } else {
       hint = "wifi use_address: " + vpn_ip;
     }
@@ -372,18 +464,6 @@ void TailscaleComponent::publish_state_() {
       this->key_expiry_sensor_->publish_state(key_expiry_iso);
     }
   }
-  if (this->ha_route_sensor_ != nullptr || this->ha_ip_sensor_ != nullptr) {
-    std::string ha_ip;
-    std::string route = this->detect_ha_route_(&ha_ip);
-    if (this->ha_route_sensor_ != nullptr &&
-        this->ha_route_sensor_->state != route) {
-      this->ha_route_sensor_->publish_state(route);
-    }
-    if (this->ha_ip_sensor_ != nullptr &&
-        this->ha_ip_sensor_->state != ha_ip) {
-      this->ha_ip_sensor_->publish_state(ha_ip);
-    }
-  }
   if (this->tailnet_name_sensor_ != nullptr && this->ml_ != nullptr && this->tailnet_name_.empty()) {
     // Extract tailnet name from first peer's FQDN (e.g., "host.tailXXXXX.ts.net" -> "tailXXXXX.ts.net")
     int count = microlink_get_peer_count(this->ml_);
@@ -430,6 +510,41 @@ void TailscaleComponent::publish_state_() {
       this->peer_list_sensor_->publish_state(list);
     }
   }
+  }  // else (connected)
+  if (this->ha_route_sensor_ != nullptr || this->ha_ip_sensor_ != nullptr) {
+    std::string ha_ip;
+    std::string route;
+    if (!this->vpn_stopping_) {
+      route = this->detect_ha_route_(&ha_ip);
+    }
+    if (this->ha_route_sensor_ != nullptr &&
+        this->ha_route_sensor_->state != route) {
+      this->ha_route_sensor_->publish_state(route);
+      if (route.empty()) this->ha_route_sensor_->set_has_state(false);
+    }
+    if (this->ha_ip_sensor_ != nullptr &&
+        this->ha_ip_sensor_->state != ha_ip) {
+      this->ha_ip_sensor_->publish_state(ha_ip);
+      if (ha_ip.empty()) this->ha_ip_sensor_->set_has_state(false);
+    }
+  }
+  if (this->control_plane_sensor_ != nullptr) {
+    std::string cp;
+    if (this->login_server_.empty() || this->login_server_.find("tailscale.com") != std::string::npos) {
+      cp = "Tailscale";
+    } else {
+      cp = "Headscale";
+    }
+    if (this->control_plane_sensor_->state != cp) {
+      this->control_plane_sensor_->publish_state(cp);
+    }
+  }
+  if (this->login_server_sensor_ != nullptr) {
+    std::string ls = this->login_server_.empty() ? "https://controlplane.tailscale.com" : this->login_server_;
+    if (this->login_server_sensor_->state != ls) {
+      this->login_server_sensor_->publish_state(ls);
+    }
+  }
   if (this->memory_mode_sensor_ != nullptr && this->memory_mode_sensor_->state.empty()) {
     // Memory mode never changes - publish once
     size_t psram = esp_psram_get_size();
@@ -444,50 +559,68 @@ void TailscaleComponent::publish_state_() {
 #endif
 
 #ifdef USE_SENSOR
-  // Count peers by type
-  int total = this->get_peer_count();
-  int online = 0, direct = 0, derp = 0;
-  if (this->ml_ != nullptr) {
-    for (int i = 0; i < total; i++) {
-      microlink_peer_info_t info;
-      if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
-        online++;
-        if (info.direct_path) direct++; else derp++;
+  auto pub_sensor = [](sensor::Sensor *s, float val) {
+    if (s == nullptr) return;
+    if (std::isnan(val) && std::isnan(s->state)) return;
+    if (s->state != val) s->publish_state(val);
+  };
+  if (connected) {
+    int total = this->get_peer_count();
+    int online = 0, direct = 0, derp = 0;
+    if (this->ml_ != nullptr) {
+      for (int i = 0; i < total; i++) {
+        microlink_peer_info_t info;
+        if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
+          online++;
+          if (info.direct_path) direct++; else derp++;
+        }
       }
     }
-  }
-
-  auto pub_sensor = [](sensor::Sensor *s, float val) {
-    if (s != nullptr && s->state != val) s->publish_state(val);
-  };
-  pub_sensor(this->peers_total_sensor_, static_cast<float>(total));
-  pub_sensor(this->peers_online_sensor_, static_cast<float>(online));
-  pub_sensor(this->peers_direct_sensor_, static_cast<float>(direct));
-  pub_sensor(this->peers_derp_sensor_, static_cast<float>(derp));
-  pub_sensor(this->peers_max_sensor_, static_cast<float>(this->max_peers_));
-  if (this->uptime_sensor_ != nullptr) {
+    pub_sensor(this->peers_total_sensor_, static_cast<float>(total));
+    pub_sensor(this->peers_online_sensor_, static_cast<float>(online));
+    pub_sensor(this->peers_direct_sensor_, static_cast<float>(direct));
+    pub_sensor(this->peers_derp_sensor_, static_cast<float>(derp));
     float uptime_s = 0;
     if (this->connected_since_ms_ > 0) {
       uptime_s = static_cast<float>((millis() - this->connected_since_ms_) / 1000);
     }
-    if (this->uptime_sensor_->state != uptime_s) {
-      this->uptime_sensor_->publish_state(uptime_s);
-    }
+    pub_sensor(this->uptime_sensor_, uptime_s);
+  } else {
+    float nan = NAN;
+    pub_sensor(this->peers_total_sensor_, nan);
+    pub_sensor(this->peers_online_sensor_, nan);
+    pub_sensor(this->peers_direct_sensor_, nan);
+    pub_sensor(this->peers_derp_sensor_, nan);
+    pub_sensor(this->uptime_sensor_, nan);
   }
+  pub_sensor(this->peers_max_sensor_, static_cast<float>(this->max_peers_));
+  pub_sensor(this->connections_sensor_, static_cast<float>(this->connection_count_));
 #endif
 
 #ifdef USE_TEXT_SENSOR
   if (this->peer_status_sensor_ != nullptr) {
-    std::string status;
-    if (online >= this->max_peers_) {
-      status = "Full";
-    } else if (online >= this->max_peers_ - 2) {
-      status = "Warning";
-    } else {
-      status = "OK";
-    }
-    if (this->peer_status_sensor_->state != status) {
-      this->peer_status_sensor_->publish_state(status);
+    if (connected) {
+      int online = 0;
+      if (this->ml_ != nullptr) {
+        int total = this->get_peer_count();
+        for (int i = 0; i < total; i++) {
+          microlink_peer_info_t info;
+          if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) online++;
+        }
+      }
+      std::string status;
+      if (online >= this->max_peers_) {
+        status = "Full";
+      } else if (online >= this->max_peers_ - 2) {
+        status = "Warning";
+      } else {
+        status = "OK";
+      }
+      if (this->peer_status_sensor_->state != status) {
+        this->peer_status_sensor_->publish_state(status);
+      }
+    } else if (!this->peer_status_sensor_->state.empty()) {
+      this->peer_status_sensor_->publish_state("");
     }
   }
 #endif
@@ -497,9 +630,24 @@ void TailscaleComponent::set_tailscale_enabled(bool enabled) {
   ESP_LOGI(TAG, "Tailscale %s requested", enabled ? "enable" : "disable");
   this->enable_rollback_value_ = this->tailscale_user_enabled_;
   this->tailscale_user_enabled_ = enabled;
-  this->enable_rollback_pending_ = true;
-  this->enable_rollback_ms_ = millis();
+  bool api_was_connected = false;
+#ifdef USE_API
+  api_was_connected = api::global_api_server != nullptr && api::global_api_server->is_connected();
+#endif
+  if (api_was_connected) {
+    this->enable_rollback_pending_ = true;
+    this->enable_rollback_ms_ = millis();
+    ESP_LOGI(TAG, "HA API connected — arming 60s rollback safety");
+  } else {
+    this->enable_rollback_pending_ = false;
+    ESP_LOGI(TAG, "No HA API connection — no rollback armed");
+  }
   if (!enabled && this->ml_ != nullptr) {
+    this->vpn_stopping_ = true;
+    s_vpn_stopping.store(true);
+    this->current_state_ = ML_STATE_IDLE;
+    this->connected_since_ms_ = 0;
+    this->publish_state_();
     ESP_LOGI(TAG, "Stopping Tailscale in 300ms...");
     // Deferred teardown so the switch state change can flush through the API first
     // (otherwise HA sees the TCP tear down before the state update arrives and its
@@ -507,14 +655,22 @@ void TailscaleComponent::set_tailscale_enabled(bool enabled) {
     this->set_timeout("tailscale_stop", 300, [this]() {
       if (this->ml_ != nullptr) {
         ESP_LOGI(TAG, "Stopping Tailscale now");
-        microlink_stop(this->ml_);
-        microlink_destroy(this->ml_);
+        s_active_ml.store(nullptr);
+        microlink_set_state_callback(this->ml_, nullptr, nullptr);
+        microlink_set_peer_callback(this->ml_, nullptr, nullptr);
+        microlink_t *old_ml = this->ml_;
         this->ml_ = nullptr;
+        this->vpn_stopping_ = false;
         this->current_state_ = ML_STATE_IDLE;
+        this->connected_since_ms_ = 0;
         this->state_changed_ = true;
+        s_stop_in_progress.store(true);
+        xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
       }
     });
   } else if (enabled && this->ml_ == nullptr) {
+    this->vpn_stopping_ = false;
+    s_vpn_stopping.store(false);
     ESP_LOGI(TAG, "Re-enabling Tailscale...");
     // Will start in next loop() iteration
   }
@@ -542,9 +698,13 @@ void TailscaleComponent::request_reconnect() {
   esp_err_t err = microlink_rebind(this->ml_);
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "Rebind call failed (%d), escalating to full restart...", err);
-    microlink_stop(this->ml_);
-    microlink_destroy(this->ml_);
+    s_active_ml.store(nullptr);
+    microlink_set_state_callback(this->ml_, nullptr, nullptr);
+    microlink_set_peer_callback(this->ml_, nullptr, nullptr);
+    microlink_t *old_ml = this->ml_;
     this->ml_ = nullptr;
+    s_stop_in_progress.store(true);
+    xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
     this->reconnect_phase_ = RECONNECT_FULL;
     this->reconnect_start_ms_ = millis();
   }
@@ -554,7 +714,7 @@ std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
   if (out_ip != nullptr) out_ip->clear();
 #ifdef USE_API
   if (api::global_api_server == nullptr || !api::global_api_server->is_connected()) {
-    return "Unknown";
+    return "";
   }
   uint16_t api_port = api::global_api_server->get_port();
   // Snapshot active TCP pcbs into a small local array under LOCK_TCPIP_CORE —
@@ -586,7 +746,7 @@ std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
 
   // Classify + look up peers OUTSIDE the core lock — microlink_get_peer_info
   // is not bounded-latency and must not be called while holding tcpip.
-  std::string route = "Unknown";
+  std::string route;
   std::string all_ips;
   bool ts_pcb_found = false;
   std::string ts_route;
@@ -633,7 +793,7 @@ std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
   if (out_ip != nullptr) *out_ip = all_ips;
   return route;
 #else
-  return "Unknown";
+  return "";
 #endif
 }
 

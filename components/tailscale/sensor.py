@@ -16,11 +16,12 @@ PEER_SCHEMA = sensor.sensor_schema(
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_TAILSCALE_ID): cv.use_id(TailscaleComponent),
-        cv.Optional("peers_online", default={"name": "Tailscale Peers Online"}): PEER_SCHEMA,
-        cv.Optional("peers_direct", default={"name": "Tailscale Peers Direct"}): PEER_SCHEMA,
-        cv.Optional("peers_derp", default={"name": "Tailscale Peers DERP"}): PEER_SCHEMA,
-        cv.Optional("peers_max", default={"name": "Tailscale Peers Max"}): PEER_SCHEMA,
-        cv.Optional("uptime", default={"name": "Tailscale Uptime"}): sensor.sensor_schema(
+        cv.Optional("peers_online", default={"name": "VPN Peers Online"}): PEER_SCHEMA,
+        cv.Optional("peers_direct", default={"name": "VPN Peers Direct"}): PEER_SCHEMA,
+        cv.Optional("peers_derp", default={"name": "VPN Peers DERP"}): PEER_SCHEMA,
+        cv.Optional("peers_max", default={"name": "VPN Peers Max"}): PEER_SCHEMA,
+        cv.Optional("connections", default={"name": "VPN Connect Count"}): PEER_SCHEMA,
+        cv.Optional("uptime", default={"name": "VPN Uptime"}): sensor.sensor_schema(
             accuracy_decimals=0,
             state_class=STATE_CLASS_MEASUREMENT,
             device_class="duration",
@@ -39,6 +40,7 @@ async def to_code(config):
         ("peers_direct", "set_peers_direct_sensor"),
         ("peers_derp", "set_peers_derp_sensor"),
         ("peers_max", "set_peers_max_sensor"),
+        ("connections", "set_connections_sensor"),
         ("uptime", "set_uptime_sensor"),
     ]:
         sens = await sensor.new_sensor(config[key])

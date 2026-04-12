@@ -16,6 +16,35 @@ new empty `[Unreleased]` section added above it.
 
 ### Added
 
+- **VPN Auto-Rollback binary sensor** — shows whether turning off VPN would
+  trigger the 60 s dead-man's-switch rollback (i.e. HA is connected via
+  Tailscale).
+- **Consistent "Unknown" sensor states** — when VPN is disconnected, all
+  dynamic text sensors, numeric sensors, HA route/IP sensors, and the key
+  expiry warning binary sensor now show HA-native "Unknown" instead of blank
+  or stale values. Static config values (Control Plane, Login Server, Peers
+  Max) and lifetime counters (Connect Count) remain visible.
+- **VPN switch OFF/ON reliability** — fixed use-after-free in microlink's
+  zombie coord task that caused VPN to auto-reconnect ~18 s after switch OFF.
+  Stop/destroy now runs on a background FreeRTOS task to avoid blocking
+  loopTask and triggering WDT. Added atomic pointer guard (`s_active_ml`)
+  in callbacks and sequencing gate (`s_stop_in_progress`) to prevent
+  resource contention during OFF/ON cycles.
+- **Pre-publish sensor clearing** — when HA is connected via Tailscale and
+  VPN is turned off, sensor clear values are published before the tunnel
+  dies (while API is still alive), so HA sees the state change.
+- **HA API sensors accuracy** — HA API Connected, Connection Route, and
+  Connection IP now correctly reflect real-time API state during VPN
+  shutdown (detect Tailscale route and show disconnected).
+- **`example-dev-tailscale.yaml`** and **`example-dev-headscale.yaml`** —
+  separate dev configs for Tailscale SaaS and Headscale backends.
+
+### Changed
+
+- **VPN Connect Count** — renamed from "VPN Connections" for clarity.
+- **Microlink log levels** — demoted noisy per-packet UDP RX/TX and WG RX
+  logs from INFO to DEBUG.
+
 - **Tailscale VPN on ESP32** as a drop-in ESPHome external component. The
   device joins your tailnet as a real Tailscale node — no subnet router,
   reverse proxy, or middleman. Built on the
