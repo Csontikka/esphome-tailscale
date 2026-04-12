@@ -16,55 +16,67 @@ time:
 binary_sensor:
   - platform: tailscale
     connected:
-      name: "Tailscale Connected"
+      name: "VPN Connected"
     key_expiry_warning:
-      name: "Tailscale Key Expiry Warning"
+      name: "VPN Key Expiry Warning"
+    ha_connected:
+      name: "HA API Connected"
+    vpn_auto_rollback:
+      name: "VPN Auto-Rollback"
 
 text_sensor:
   - platform: tailscale
     ip_address:
-      name: "Tailscale IP"
-    tailscale_hostname:
-      name: "Tailscale Hostname"
+      name: "VPN IP"
+    vpn_hostname:
+      name: "VPN Hostname"
     memory_mode:
-      name: "Tailscale Memory"
+      name: "Device Memory"
     setup_status:
-      name: "Tailscale Setup Hint"
+      name: "VPN Setup Hint"
     peer_status:
-      name: "Tailscale Peer Status"
+      name: "VPN Peer Status"
     magicdns:
-      name: "Tailscale MagicDNS"
-    tailnet_name:
-      name: "Tailscale Tailnet"
+      name: "VPN MagicDNS"
+    network_name:
+      name: "VPN Network"
     key_expiry:
-      name: "Tailscale Key Expiry"
+      name: "VPN Key Expiry"
     ha_connection_route:
-      name: "HA Connection Route"
+      name: "HA API Connection Route"
+    ha_connection_ip:
+      name: "HA API Connection IP"
+    control_plane:
+      name: "VPN Control Plane"
+    login_server:
+      name: "VPN Login Server"
 
 button:
   - platform: tailscale
     reconnect:
-      name: "Tailscale Reconnect"
+      name: "VPN Reconnect"
   - platform: restart
     name: "Reboot"
 
 sensor:
   - platform: tailscale
     peers_online:
-      name: "Tailscale Peers Online"
+      name: "VPN Peers Online"
     peers_direct:
-      name: "Tailscale Peers Direct"
+      name: "VPN Peers Direct"
     peers_derp:
-      name: "Tailscale Peers DERP"
+      name: "VPN Peers DERP"
     peers_max:
-      name: "Tailscale Peers Max"
+      name: "VPN Peers Max"
     uptime:
-      name: "Tailscale Uptime"
+      name: "VPN Uptime"
+    connections:
+      name: "VPN Connect Count"
 
 switch:
   - platform: tailscale
     vpn_enabled:
-      name: "Tailscale Enabled"
+      name: "VPN Enabled"
     debug_log:
-      name: "Tailscale Debug Log"
+      name: "VPN Debug Log"
       restore_mode: RESTORE_DEFAULT_OFF

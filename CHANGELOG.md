@@ -51,6 +51,11 @@ new empty `[Unreleased]` section added above it.
 - **WireGuard printf noise eliminated** — converted raw `printf("[WG_...")`
   calls in the WireGuard lwIP layer to `WG_DEBUG()` macro, which compiles
   to a no-op when `WG_DEBUG_LOGGING=0` (default).
+- **Package YAML updated** — added all missing entities (HA API Connected,
+  VPN Auto-Rollback, VPN Hostname, HA API Connection IP, VPN Control Plane,
+  VPN Login Server, VPN Network, VPN Connect Count, VPN Debug Log switch)
+  and fixed stale key names (`tailscale_enabled` → `vpn_enabled`,
+  `tailscale_hostname` → `vpn_hostname`, `tailnet_name` → `network_name`).
 
 - **Tailscale VPN on ESP32** as a drop-in ESPHome external component. The
   device joins your tailnet as a real Tailscale node — no subnet router,
