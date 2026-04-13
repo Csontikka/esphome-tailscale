@@ -52,7 +52,7 @@ text_sensor:
     login_server:
       name: "VPN Login Server"
     auth_key_status:
-      name: "VPN Auth Key Status"
+      name: "VPN Auth Key Source"
 
 text:
   - platform: tailscale

@@ -1025,7 +1025,7 @@ void TailscaleComponent::publish_auth_key_status_() {
 
   std::string status;
   if (!this->auth_key_overridden_) {
-    status = "Default";
+    status = "Default (YAML)";
   } else if (this->runtime_auth_key_ts_ > 0) {
     struct tm tm_info;
     time_t ts = (time_t)this->runtime_auth_key_ts_;
