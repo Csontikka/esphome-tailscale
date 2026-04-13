@@ -318,15 +318,15 @@ All entities are created automatically when you include the package.
 | --- | --- |
 | **VPN IP** | The `100.x.y.z` address assigned to this node. Empty until connected. |
 | **VPN Hostname** | The hostname this node registered with, e.g. `esp32-tailscale`. |
-| **VPN MagicDNS** | The FQDN, e.g. `esp32-tailscale.tailXXXXX.ts.net`. |
-| **VPN Network** | Just the tailnet domain portion, e.g. `tailXXXXX.ts.net`. |
+| **VPN MagicDNS** | The FQDN, e.g. `esp32-tailscale.tailXXXXX.ts.net` (Tailscale SaaS) or `esp32-tailscale.headscale.local` (Headscale with `magic_dns: true`). Unknown if MagicDNS is not configured on the control plane. |
+| **VPN Network** | The tailnet domain, e.g. `tailXXXXX.ts.net` (Tailscale SaaS) or the Headscale `base_domain`. Unknown if not provided by the control plane. |
 | **Device Memory** | Reports `PSRAM <size>KB` or `Internal RAM` so you can confirm PSRAM was detected. |
 | **VPN Setup Hint** | Human-readable next-action hint, e.g. `wifi use_address: 100.x.y.z`. Shows auth-source-aware failure messages after 60 s, node key expiry deadline date when applicable, and clickable GitHub README links. |
 | **VPN Peer Status** | `OK` / `Warning` / `Full` based on how close you are to the `max_peers` limit. |
-| **VPN Node Key Expiry** | ISO-8601 timestamp of the node's key expiry (`device_class: timestamp`). Once you disable key expiry on the node it becomes empty — HA renders that as **Unknown**, which is the correct state for a timestamp that no longer applies. See the **VPN Node Key Expiry Warning** binary sensor for the simple on/off view. |
+| **VPN Node Key Expiry** | ISO-8601 timestamp of the node's key expiry (`device_class: timestamp`). Shows **Unknown** when key expiry is disabled (Tailscale SaaS: click "Disable key expiry") or not applicable (Headscale: no expiry by default). Unknown is the correct, healthy state. See the **VPN Node Key Expiry Warning** binary sensor for the simple on/off view. |
 | **HA API Connection Route** | How the *currently-connected* HA instance is reaching the device: `Tailscale Direct`, `Tailscale DERP`, `Local`, or `Unknown`. Updates live. |
 | **HA API Connection IP** | The IP address of the currently-connected HA API client. Deduplicated when multiple clients connect. |
-| **VPN Control Plane** | The control-plane URL in use (`controlplane.tailscale.com` for Tailscale SaaS, or the custom `login_server` value for Headscale). Static — set at boot. |
+| **VPN Control Plane** | Friendly name of the active control plane: `Tailscale` when using SaaS, `Headscale` when `login_server` points elsewhere. Static — set at boot. |
 | **VPN Login Server** | The raw `login_server` YAML value (empty for Tailscale SaaS). Static — set at boot. |
 | **VPN Auth Key Source** | Shows `Default (YAML)` when using the built-in auth key, or `Override (YYYY-MM-DD HH:MM)` with the timestamp when a runtime override is active. |
 
@@ -345,7 +345,7 @@ All entities are created automatically when you include the package.
 
 | Entity | Description |
 | --- | --- |
-| **VPN Auth Key Override** | Password-mode text input. Submit a new Tailscale auth key to replace the YAML default at runtime — no reflash needed. The key is persisted in NVS across reboots. Submit an empty value to revert to the YAML default. See **VPN Auth Key Source** for which key is active. |
+| **VPN Auth Key Override** | Password-mode text input. Submit a new auth key (`tskey-auth-...` for Tailscale SaaS, `hskey-auth-...` for Headscale) to replace the YAML default at runtime — no reflash needed. The key is persisted in NVS across reboots. Submit an empty value to revert to the YAML default. See **VPN Auth Key Source** for which key is active. Max 128 characters. |
 
 ### Switches
 
@@ -439,9 +439,6 @@ Once the device is added via the ESPHome integration, all entities show up under
 
 ### Dashboard card
 
-![Home Assistant Dashboard Card](docs/images/ha-dashboard-card.png)
-<!-- IMAGE: Finished Home Assistant dashboard card showing connected state, IP, peers direct/DERP counts, route, uptime, reboot/reconnect buttons, enable switch. -->
-
 ```yaml
 type: entities
 title: Tailscale ESP32
@@ -476,23 +473,33 @@ entities:
 
 ### Automation: warn if key expiry is still enabled
 
-If you forget to disable key expiry on a new node, this automation nags you as soon as the device comes online with expiry still set. The `VPN Node Key Expiry Warning` binary sensor is `on` whenever the control plane reports a non-zero expiry.
+If you forget to disable key expiry on a new node, this automation checks every hour and warns you about **any** ESP device that still has key expiry enabled. Works automatically with multiple devices — no need to list entity IDs by hand.
 
 ```yaml
-alias: Tailscale key expiry still enabled
+alias: Tailscale node key expiry check
 trigger:
-  - platform: state
-    entity_id: binary_sensor.esp32_tailscale_vpn_node_key_expiry_warning
-    to: "on"
-    for: "00:02:00"
+  - platform: time_pattern
+    hours: "/1"
 action:
+  - variables:
+      warnings: >
+        {{ states.binary_sensor
+           | selectattr('entity_id', 'search', '_vpn_node_key_expiry_warning$')
+           | selectattr('state', 'eq', 'on')
+           | map(attribute='entity_id')
+           | list }}
+  - condition: template
+    value_template: "{{ warnings | length > 0 }}"
   - service: notify.mobile_app_phone
     data:
       title: "Tailscale key expiry still on"
       message: >
-        ESP32 Tailscale node key will expire at
-        {{ states('text_sensor.esp32_tailscale_vpn_node_key_expiry') }}.
-        Open the Tailscale admin console and click "Disable key expiry".
+        {% for entity_id in warnings %}
+        {% set device = device_attr(device_id(entity_id), 'name') %}
+        {% set expiry_id = entity_id | replace('binary_sensor.', 'text_sensor.') | replace('_warning', '') %}
+        - {{ device }}: expires {{ states(expiry_id) }}
+        {% endfor %}
+        Open the admin console and click "Disable key expiry" for each device.
 ```
 
 ---
