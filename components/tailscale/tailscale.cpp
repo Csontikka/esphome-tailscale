@@ -137,6 +137,12 @@ void TailscaleComponent::loop() {
     }
   }
 
+  // Publish static sensor values once after microlink starts (or WiFi connects)
+  if (!this->initial_publish_done_ && wifi::global_wifi_component->is_connected()) {
+    this->initial_publish_done_ = true;
+    this->state_changed_ = true;
+  }
+
   // Registration failure detection: if microlink is running but never connected after 60s
   if (this->ml_ != nullptr && !this->is_connected() && this->connection_count_ == 0 &&
       this->microlink_start_ms_ > 0 && (millis() - this->microlink_start_ms_ > 60000)) {
@@ -368,7 +374,8 @@ void TailscaleComponent::publish_state_() {
   bool connected = this->is_connected();
 
 #ifdef USE_BINARY_SENSOR
-  if (this->connected_sensor_ != nullptr && this->connected_sensor_->state != connected) {
+  if (this->connected_sensor_ != nullptr &&
+      (!this->connected_sensor_->has_state() || this->connected_sensor_->state != connected)) {
     this->connected_sensor_->publish_state(connected);
   }
   if (!connected && this->key_expiry_warning_sensor_ != nullptr && this->key_expiry_warning_sensor_->has_state()) {
@@ -385,7 +392,8 @@ void TailscaleComponent::publish_state_() {
       }
     }
 #endif
-    if (this->ha_connected_sensor_ != nullptr && this->ha_connected_sensor_->state != api_alive) {
+    if (this->ha_connected_sensor_ != nullptr &&
+        (!this->ha_connected_sensor_->has_state() || this->ha_connected_sensor_->state != api_alive)) {
       this->ha_connected_sensor_->publish_state(api_alive);
     }
     if (this->vpn_auto_rollback_sensor_ != nullptr) {
