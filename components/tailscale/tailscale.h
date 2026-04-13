@@ -146,6 +146,8 @@ class TailscaleComponent : public Component {
   uint32_t connected_since_ms_{0};
   uint32_t connection_count_{0};
   uint32_t last_sensor_publish_ms_{0};
+  uint32_t microlink_start_ms_{0};
+  bool registration_failed_logged_{false};
   std::atomic<bool> vpn_stopping_{false};
 
   // Reconnect state machine

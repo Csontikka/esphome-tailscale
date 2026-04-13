@@ -124,6 +124,8 @@ void TailscaleComponent::start_microlink_() {
     return;
   }
 
+  this->microlink_start_ms_ = millis();
+  this->registration_failed_logged_ = false;
   ESP_LOGI(TAG, "Tailscale started after WiFi connected!");
 }
 
@@ -133,6 +135,24 @@ void TailscaleComponent::loop() {
     if (this->tailscale_user_enabled_ && !this->vpn_stopping_) {
       this->start_microlink_();
     }
+  }
+
+  // Registration failure detection: if microlink is running but never connected after 60s
+  if (this->ml_ != nullptr && !this->is_connected() && this->connection_count_ == 0 &&
+      this->microlink_start_ms_ > 0 && (millis() - this->microlink_start_ms_ > 60000)) {
+    if (!this->registration_failed_logged_) {
+      this->registration_failed_logged_ = true;
+      ESP_LOGW(TAG, "Not connected after 60s — check auth_key and network. "
+               "If you deleted this device from the admin panel, also erase NVS (Clean Build Files + reflash).");
+    }
+#ifdef USE_TEXT_SENSOR
+    if (this->setup_status_sensor_ != nullptr) {
+      std::string hint = "Connection failed — check auth_key in secrets.yaml";
+      if (this->setup_status_sensor_->state != hint) {
+        this->setup_status_sensor_->publish_state(hint);
+      }
+    }
+#endif
   }
 
   // Auto-confirm rollback after 30s if HA API is still connected (proof HA can see us)
@@ -321,6 +341,7 @@ void TailscaleComponent::state_callback(microlink_t *ml, microlink_state_t state
   if (state == ML_STATE_CONNECTED) {
     self->connection_count_++;
     self->connected_since_ms_ = millis();
+    self->registration_failed_logged_ = false;
     uint32_t ip = microlink_get_vpn_ip(ml);
     char ip_str[16];
     microlink_ip_to_str(ip, ip_str);
