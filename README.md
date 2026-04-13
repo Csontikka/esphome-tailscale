@@ -566,6 +566,7 @@ Accepted forms:
 **One more thing to watch for:**
 
 - **Auth keys come from the coordinator that issues them.** A Tailscale SaaS `tskey-auth-...` will not work against Headscale, and vice versa. Generate the key on the same coordinator you will connect to. Headscale / Headplane generates keys with a `hskey-auth-...` prefix (older CLI versions may output raw hex).
+- **Switching between Tailscale SaaS and Headscale** (or vice versa) requires both a new `login_server` value in the YAML and a matching auth key. The auth key can be changed at runtime via the **VPN Auth Key Override** entity in HA — no reflash needed for the key itself. However, changing `login_server` requires a YAML edit and reflash.
 
 For the full reproduction — docker-compose, a minimal `config.yaml`, and the CLI commands to create a user and preauth key — see [`contrib/headscale-test/README.md`](contrib/headscale-test/README.md). That directory is intentionally not shipped via the `packages:` distribution.
 
@@ -584,7 +585,7 @@ Two settings in the admin panel (Tailscale Admin Console or Headplane UI) decide
 
 At first boot the component reads the auth key, performs the tailnet join, and persists the resulting node key to NVS. Every subsequent boot reuses that node key, which is why the same device appears as the same machine across power cycles.
 
-Two operations invalidate this and effectively create a new machine on the tailnet:
+Three scenarios cause the device to appear as a new machine on the tailnet:
 
 - **`esptool erase_flash`** wipes NVS and forces a fresh join. The old machine entry in the admin panel becomes orphaned and should be deleted manually.
 - **Changing `hostname`** in the YAML. From Tailscale's perspective this is a new node; the old entry lingers with the old name until deleted.
@@ -800,6 +801,15 @@ Yes, if the auth key is marked **Reusable** in the admin console (Tailscale Admi
 
 **Q: My tailnet has ACLs. Do I need to grant the ESP access to HA?**
 Yes, Home Assistant needs to be allowed to reach the ESP's API port (default `6053`). If you use tags, tag the ESP when generating the auth key (e.g. `tag:esphome`) and write an ACL rule allowing your HA host (or your whole tailnet) to reach `tag:esphome:*`.
+
+**Q: Can I use this with Headscale (self-hosted)?**
+Yes. Set `login_server` to your Headscale URL and use a preauth key from the Headplane UI or `headscale preauthkeys create`. See [Custom control plane (Headscale)](#custom-control-plane-headscale) for details. Verified end-to-end against Headscale 0.23.0.
+
+**Q: Do I need to disable key expiry on Headscale too?**
+No. Headscale does not expire node keys by default — the **VPN Node Key Expiry Warning** sensor stays OFF and the **VPN Node Key Expiry** sensor shows Unknown, which is the correct, healthy state. You only need to worry about key expiry on Tailscale SaaS.
+
+**Q: Can I switch between Tailscale SaaS and Headscale?**
+Yes, but it requires a YAML edit (`login_server`) and a reflash. The auth key can be changed at runtime via the **VPN Auth Key Override** entity — no reflash needed for the key itself. The old machine entry on the previous control plane becomes orphaned and should be deleted.
 
 **Q: Can I ping the ESP from another tailnet node?**
 Yes. Once connected, it responds to ICMP on its `100.x` address like any other Tailscale node. Great for sanity checks.
