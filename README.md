@@ -115,7 +115,8 @@ Copy the key (starts with `tskey-auth-...`) — you'll paste it into your ESPHom
 >
 > 1. Generate an auth key, flash the ESP with it, let the device register.
 > 2. **Then go to the Tailscale admin → Machines → your ESP → ⋯ → "Disable key expiry".** This tells Tailscale "this specific device's *node* key never expires". Now the ESP stays on the tailnet forever, regardless of whether the original auth key expires.
-> 3. After that, the auth key is basically discardable — if it expires, nothing happens to the already-registered device. You only need a new auth key if you want to flash *another* ESP, or re-register this one from scratch (e.g. after `esptool erase_flash`).
+> 3. **Reboot the ESP** (press the Reboot button in HA or power-cycle it). The updated expiry status is only fetched from the control plane during a fresh login — a simple reconnect is not enough. After the reboot, the **VPN Key Expiry Warning** sensor should turn off and the **VPN Setup Hint** will switch from the key-expiry URL to the `use_address` hint.
+> 4. After that, the auth key is basically discardable — if it expires, nothing happens to the already-registered device. You only need a new auth key if you want to flash *another* ESP, or re-register this one from scratch (e.g. after `esptool erase_flash`).
 >
 > If you skip step 2, everything will *look* fine for months, and then one day the device silently drops off the tailnet and you'll have no idea why. **Disable node key expiry. Always. For every ESP you flash.**
 
