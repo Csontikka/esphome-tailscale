@@ -360,7 +360,8 @@ void TailscaleComponent::publish_state_() {
         std::string route = this->detect_ha_route_();
         would_rollback = route.find("Tailscale") != std::string::npos;
       }
-      if (this->vpn_auto_rollback_sensor_->state != would_rollback) {
+      if (!this->vpn_auto_rollback_sensor_->has_state() ||
+          this->vpn_auto_rollback_sensor_->state != would_rollback) {
         this->vpn_auto_rollback_sensor_->publish_state(would_rollback);
       }
     }
