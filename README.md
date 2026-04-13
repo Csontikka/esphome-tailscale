@@ -567,7 +567,7 @@ Two operations invalidate this and effectively create a new machine on the tailn
 
 - **`esptool erase_flash`** wipes NVS and forces a fresh join. The old machine entry in the admin panel becomes orphaned and should be deleted manually.
 - **Changing `hostname`** in the YAML. From Tailscale's perspective this is a new node; the old entry lingers with the old name until deleted.
-- **Deleting the device in the Tailscale Admin Console** without erasing NVS on the ESP. The ESP still has the old machine key in NVS, but the control plane no longer recognizes it. The device will fail to connect and show "Connection failed" in the Setup Hint. To fix this, erase NVS (`esptool erase_flash` or ESPHome's "Clean Build Files" + reflash) so the device generates a fresh machine key and re-registers as a new node.
+- **Deleting the device in the Tailscale Admin Console.** If the auth key is **reusable and still valid**, the device will automatically re-register with the same IP — no action needed. If the auth key is **single-use or expired**, the device will fail to connect ("Connection failed" in Setup Hint). To fix this, either enter a new auth key via the **VPN Auth Key Override** entity in HA, or erase NVS (`esptool erase_flash` or ESPHome's "Clean Build Files" + reflash) and provide a fresh auth key in the YAML.
 
 Clean up orphans when renaming or reflashing. It is easy to accumulate ghost machines otherwise.
 

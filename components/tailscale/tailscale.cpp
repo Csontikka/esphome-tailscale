@@ -182,12 +182,19 @@ void TailscaleComponent::loop() {
       this->microlink_start_ms_ > 0 && (millis() - this->microlink_start_ms_ > 60000)) {
     if (!this->registration_failed_logged_) {
       this->registration_failed_logged_ = true;
-      ESP_LOGW(TAG, "Not connected after 60s — check auth_key and network. "
-               "If you deleted this device from the admin panel, also erase NVS (Clean Build Files + reflash).");
+      if (this->auth_key_overridden_) {
+        ESP_LOGW(TAG, "Not connected after 60s — check VPN Auth Key Override in HA. "
+                 "If invalid, submit empty to revert to YAML default.");
+      } else {
+        ESP_LOGW(TAG, "Not connected after 60s — check auth_key in secrets.yaml. "
+                 "If single-use and expired, generate a new one or use VPN Auth Key Override in HA.");
+      }
     }
 #ifdef USE_TEXT_SENSOR
     if (this->setup_status_sensor_ != nullptr) {
-      std::string hint = "Connection failed — check auth_key in secrets.yaml";
+      std::string hint = this->auth_key_overridden_
+          ? "Connection failed — check VPN Auth Key Override or submit empty to revert"
+          : "Connection failed — check auth_key in secrets.yaml";
       if (this->setup_status_sensor_->state != hint) {
         this->setup_status_sensor_->publish_state(hint);
       }
@@ -977,6 +984,7 @@ void TailscaleComponent::try_save_auth_key_() {
 }
 
 void TailscaleComponent::save_runtime_auth_key_(const std::string &key) {
+  this->reconnect_phase_ = RECONNECT_IDLE;
   time_t now = time(nullptr);
   int64_t timestamp = (now > 1700000000) ? (int64_t)now : 0;
 
