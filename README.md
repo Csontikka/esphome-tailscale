@@ -5,10 +5,8 @@
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=plastic)](https://github.com/Csontikka/esphome-tailscale/blob/main/LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-donate-yellow.svg?style=plastic)](https://buymeacoffee.com/csontikka)
 
-> [!WARNING]
-> **🚧 HEAVY DEVELOPMENT — USE AT YOUR OWN RISK 🚧**
->
-> **This project is in an early, experimental phase.** APIs, entity names, config keys and behaviour can change without notice. Expect bugs, rough edges, and breaking changes between commits. Do **not** rely on this for anything mission-critical yet. If you try it — awesome, feedback is very welcome — but run it knowing that you are the beta tester.
+> [!NOTE]
+> **📦 First public release** — works on our hardware, but you're among the first to try it. Bug reports and feedback are welcome!
 
 > Native Tailscale VPN on **ESP32** as a plug-and-play ESPHome external component.
 > Your ESP joins your tailnet as a real Tailscale node — no subnet router, no reverse proxy, no middleman.
