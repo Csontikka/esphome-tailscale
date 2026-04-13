@@ -52,7 +52,8 @@ void TailscaleComponent::apply_debug_log(bool enabled) {
 }
 
 void TailscaleComponent::setup() {
-  this->apply_debug_log(false);
+  bool debug_on = (this->debug_log_switch_ != nullptr) && this->debug_log_switch_->state;
+  this->apply_debug_log(debug_on);
   ESP_LOGI(TAG, "Initializing Tailscale (MicroLink)...");
 
   // Runtime PSRAM detection
