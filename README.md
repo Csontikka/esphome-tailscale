@@ -251,11 +251,11 @@ Re-flash once more (still USB if the device is in front of you; from here on OTA
 > ```yaml
 > wifi:
 >   networks:
->     - ssid: "Home_WiFi"
->       password: "home_password"
+>     - ssid: !secret wifi_ssid_home
+>       password: !secret wifi_password_home
 >       priority: 2
->     - ssid: "Remote_WiFi"
->       password: "remote_password"
+>     - ssid: !secret wifi_ssid_remote
+>       password: !secret wifi_password_remote
 >       priority: 1
 >   use_address: "100.xx.yy.zz"   # ← your Tailscale IP (same everywhere)
 > ```
