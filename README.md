@@ -135,7 +135,11 @@ esp32:
     type: esp-idf
 
 packages:
-  tailscale: github://Csontikka/esphome-tailscale/packages/tailscale/tailscale.yaml@main
+  tailscale:
+    url: https://github.com/Csontikka/esphome-tailscale
+    ref: main
+    files: [packages/tailscale/tailscale.yaml]
+    refresh: 0s
 
 tailscale:
   auth_key: !secret tailscale_auth_key
@@ -563,6 +567,7 @@ Two operations invalidate this and effectively create a new machine on the tailn
 
 - **`esptool erase_flash`** wipes NVS and forces a fresh join. The old machine entry in the admin panel becomes orphaned and should be deleted manually.
 - **Changing `hostname`** in the YAML. From Tailscale's perspective this is a new node; the old entry lingers with the old name until deleted.
+- **Deleting the device in the Tailscale Admin Console** without erasing NVS on the ESP. The ESP still has the old machine key in NVS, but the control plane no longer recognizes it. The device will fail to connect and show "Connection failed" in the Setup Hint. To fix this, erase NVS (`esptool erase_flash` or ESPHome's "Clean Build Files" + reflash) so the device generates a fresh machine key and re-registers as a new node.
 
 Clean up orphans when renaming or reflashing. It is easy to accumulate ghost machines otherwise.
 
