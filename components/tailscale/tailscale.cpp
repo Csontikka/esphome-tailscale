@@ -500,7 +500,13 @@ void TailscaleComponent::publish_state_() {
     if (this->key_expiry_warning_sensor_ != nullptr &&
         this->key_expiry_warning_sensor_->has_state() &&
         this->key_expiry_warning_sensor_->state) {
-      hint = "Disable node key expiry! https://github.com/Csontikka/esphome-tailscale#disable-key-expiry";
+      hint = "Disable node key expiry in Tailscale admin! Device will stop at: ";
+      if (this->key_expiry_sensor_ != nullptr && !this->key_expiry_sensor_->state.empty()) {
+        hint += this->key_expiry_sensor_->state;
+      } else {
+        hint += "(unknown)";
+      }
+      hint += " — https://github.com/Csontikka/esphome-tailscale#disable-key-expiry";
     } else
 #endif
     if (vpn_ip.empty()) {
