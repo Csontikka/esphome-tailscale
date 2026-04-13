@@ -19,7 +19,7 @@ binary_sensor:
     connected:
       name: "VPN Connected"
     key_expiry_warning:
-      name: "VPN Key Expiry Warning"
+      name: "VPN Node Key Expiry Warning"
     ha_connected:
       name: "HA API Connected"
     vpn_auto_rollback:
@@ -42,7 +42,7 @@ text_sensor:
     network_name:
       name: "VPN Network"
     key_expiry:
-      name: "VPN Key Expiry"
+      name: "VPN Node Key Expiry"
     ha_connection_route:
       name: "HA API Connection Route"
     ha_connection_ip:

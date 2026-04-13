@@ -500,7 +500,7 @@ void TailscaleComponent::publish_state_() {
     if (this->key_expiry_warning_sensor_ != nullptr &&
         this->key_expiry_warning_sensor_->has_state() &&
         this->key_expiry_warning_sensor_->state) {
-      hint = "Disable key expiry! https://github.com/Csontikka/esphome-tailscale#disable-key-expiry";
+      hint = "Disable node key expiry! https://github.com/Csontikka/esphome-tailscale#disable-key-expiry";
     } else
 #endif
     if (vpn_ip.empty()) {
@@ -549,9 +549,9 @@ void TailscaleComponent::publish_state_() {
 #endif
        false) &&
       this->ml_ != nullptr) {
-    // The "key expiry" we get from microlink is the NODE key expiry, parsed from
-    // the Tailscale control plane's MapResponse.KeyExpiry field. When the user
-    // clicks "Disable key expiry" in the Tailscale admin, the control plane sends
+    // The node key expiry comes from the Tailscale control plane's
+    // MapResponse.KeyExpiry field. When the user clicks "Disable key expiry"
+    // in the Tailscale admin, the control plane sends
     // "0001-01-01T00:00:00Z" (Go's zero time), which the microlink parser turns
     // into a near-zero epoch. We treat anything below a sane baseline as "disabled".
     constexpr int64_t SANE_EPOCH_BASELINE = 1577836800;  // 2020-01-01 UTC

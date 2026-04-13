@@ -23,7 +23,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("magicdns", default={"name": "VPN MagicDNS"}): TS_SCHEMA,
         cv.Optional("peer_list"): TS_SCHEMA,
         cv.Optional("network_name", default={"name": "VPN Network"}): TS_SCHEMA,
-        cv.Optional("key_expiry", default={"name": "VPN Key Expiry"}): TS_TIMESTAMP_SCHEMA,
+        cv.Optional("key_expiry", default={"name": "VPN Node Key Expiry"}): TS_TIMESTAMP_SCHEMA,
         cv.Optional("ha_connection_route", default={"name": "HA API Connection Route"}): TS_SCHEMA,
         cv.Optional("ha_connection_ip", default={"name": "HA API Connection IP"}): TS_SCHEMA,
         cv.Optional("control_plane", default={"name": "VPN Control Plane"}): TS_SCHEMA,

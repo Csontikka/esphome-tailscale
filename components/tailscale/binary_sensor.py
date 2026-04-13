@@ -15,7 +15,7 @@ CONFIG_SCHEMA = cv.Schema(
         ),
         cv.Optional(
             "key_expiry_warning",
-            default={"name": "VPN Key Expiry Warning"},
+            default={"name": "VPN Node Key Expiry Warning"},
         ): binary_sensor.binary_sensor_schema(
             device_class="problem",
             entity_category="diagnostic",
