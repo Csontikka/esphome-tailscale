@@ -36,8 +36,11 @@ new empty `[Unreleased]` section added above it.
 - **HA API sensors accuracy** — HA API Connected, Connection Route, and
   Connection IP now correctly reflect real-time API state during VPN
   shutdown (detect Tailscale route and show disconnected).
+### Removed
+
 - **`example-dev-tailscale.yaml`** and **`example-dev-headscale.yaml`** —
-  separate dev configs for Tailscale SaaS and Headscale backends.
+  consolidated into `example-dev.yaml` (use the commented `login_server`
+  line to switch between Tailscale SaaS and Headscale).
 
 ### Fixed
 
