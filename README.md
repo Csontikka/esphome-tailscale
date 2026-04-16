@@ -231,6 +231,15 @@ Whichever method you picked, once the firmware is running connect to the serial 
 [I][tailscale]: Set wifi use_address: "100.xx.yy.zz" in your ESPHome YAML
 ```
 
+> [!IMPORTANT]
+> **Home Assistant OS users: disable "Userspace networking" on the Tailscale add-on.**
+>
+> The Tailscale add-on defaults to **userspace networking mode**, which keeps the VPN tunnel isolated inside the Tailscale container. In this mode, other add-ons — including the **ESPHome add-on** — cannot reach any `100.x.x.x` Tailscale address. OTA uploads, log streaming, and the ESPHome dashboard will all fail to connect to your device.
+>
+> **Fix:** Go to **Settings → Add-ons → Tailscale → Configuration** and set **"Userspace networking"** to **OFF**, then **restart** the Tailscale add-on. This creates the Tailscale network interface on the host network stack, which is shared by all add-ons.
+>
+> This only applies to Home Assistant OS and Supervised installs using the Tailscale add-on. If you run Tailscale directly on the host or in a standalone Docker container, this does not affect you.
+
 <a id="wifi-use-address"></a>
 
 ### 4. Pin `use_address` to the Tailscale IP
@@ -292,6 +301,9 @@ Go to **Settings → Devices & Services → ESPHome → Add Device** and enter t
 
 ![Home Assistant Device Page](docs/images/ha-device-page.png)
 <!-- IMAGE: The HA device page showing all the Tailscale entities in the sensor / switch / button cards. -->
+
+> [!NOTE]
+> **Already added the device via its LAN IP?** If you previously added the device to Home Assistant using its local network address (e.g. `192.168.x.x`), you need to update the ESPHome integration to use the Tailscale IP instead. Go to **Settings → Devices & Services → ESPHome**, click **Configure** on the device entry, and change the host address to the `100.x.y.z` Tailscale IP. Otherwise HA will keep connecting over the LAN and fall back to "unavailable" when the device is not on the same network.
 
 Done — the ESP is now a first-class citizen of your tailnet and your Home Assistant.
 
@@ -692,6 +704,16 @@ This means Home Assistant (or the ESPHome Builder, etc.) is reaching the device 
 ### Builder UI can't find the device over Tailscale
 
 Home Assistant's ESPHome add-on builder uses zeroconf / mDNS, which doesn't cross the tailnet boundary cleanly. Workaround: in the add-on UI add the device manually by its `100.x` IP, or run the ESPHome CLI from a machine that's on your tailnet.
+
+### ESPHome add-on can't OTA or stream logs over Tailscale (HAOS)
+
+Symptom: `use_address` is set to the device's `100.x` Tailscale IP, but the ESPHome dashboard shows the device as offline, OTA uploads time out, and log streaming never connects.
+
+This almost always means the Tailscale add-on is running in its default **userspace networking** mode, which keeps the VPN tunnel isolated inside the Tailscale container. The ESPHome add-on (and every other add-on) runs in a separate container and cannot see the `100.x.x.x` routes.
+
+**Fix:** Go to **Settings → Add-ons → Tailscale → Configuration** and set **"Userspace networking"** to **OFF**, then restart the add-on. This moves the Tailscale interface to the host network stack, which all add-ons share. After the restart, `ping 100.x.y.z` from the HA terminal should succeed, and the ESPHome dashboard will be able to reach the device.
+
+This only affects Home Assistant OS and Supervised installs using the Tailscale add-on.
 
 ---
 
