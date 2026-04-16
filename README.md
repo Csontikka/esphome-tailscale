@@ -78,6 +78,14 @@ Boards currently verified:
 
 ## Quick Start
 
+> ### 📌 Home Assistant OS users — read this first
+>
+> If you run the **Tailscale add-on** on HAOS/Supervised, you must **disable "Userspace networking mode"** in the add-on configuration before the ESPHome add-on can talk to your ESP over the tailnet. In userspace mode the tailnet is only visible inside the Tailscale add-on itself, not to any other add-on on the host.
+>
+> Settings → Add-ons → Tailscale → Configuration → **`Userspace networking mode: off`** → restart the add-on.
+>
+> See the [FAQ entry below](#faq) for the full explanation and trade-offs. Credit: [#6](https://github.com/Csontikka/esphome-tailscale/issues/6).
+
 ### 1. Create a Tailscale auth key
 
 Log in to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and go to **Settings → Personal Settings → Keys**. Click **Generate auth key...**.
@@ -811,6 +819,23 @@ Yes, but it requires a YAML edit (`login_server`) and a reflash. The auth key ca
 
 **Q: Can I ping the ESP from another tailnet node?**
 Yes. Once connected, it responds to ICMP on its `100.x` address like any other Tailscale node. Great for sanity checks.
+
+**Q: I can't ping / flash / see my ESP from the ESPHome add-on on Home Assistant OS, even though the device is online on Tailscale.**
+The HAOS Tailscale add-on ships with **"Userspace networking mode"** turned **on** by default. In that mode the tailnet is reachable *only* from the Tailscale add-on itself — other add-ons (ESPHome, Node-RED, etc.) do not see the `100.x.x.x` tailnet at all, because nothing gets added to the host's routing table.
+
+Fix:
+
+1. Settings → Add-ons → **Tailscale** → Configuration
+2. Set **`Userspace networking mode`** → **off**
+3. Restart the Tailscale add-on
+
+After the restart, HAOS has a real kernel TUN interface and the `100.64.0.0/10` tailnet is in the host routing table, so the ESPHome add-on (and everything else on HA) can reach tailnet peers directly.
+
+**What you give up by disabling userspace mode:** essentially nothing for a normal HAOS setup. The Tailscale add-on container runs with `NET_ADMIN` and touches the host routing table (slightly more privileged), and the tailnet becomes visible to all add-ons rather than just the Tailscale one. In return you gain: other add-ons can use the tailnet, MagicDNS resolves from the host resolver, and exit-node / subnet-router features become available if you ever want them. Userspace mode is mainly a portability fallback for hosts that can't provide a TUN device — HAOS can, so kernel mode is the right choice here.
+
+> **Heads-up — not the same thing as the "userspace WireGuard" section above:** This FAQ entry is about a **checkbox on the Home Assistant Tailscale *add-on***. The [Userspace WireGuard](#userspace-wireguard-what-the-node-can-and-cannot-do) section under *Deployment Notes* is about the **ESP32 node itself** (the `microlink` userspace stack running on the MCU) and explains why the ESP can't act as a subnet router or exit node. Same adjective, unrelated concept.
+
+Reported in [#6](https://github.com/Csontikka/esphome-tailscale/issues/6).
 
 ---
 

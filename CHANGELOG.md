@@ -10,6 +10,15 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Documentation
+
+- **HAOS Tailscale add-on prerequisite** — document that the Tailscale
+  add-on's "Userspace networking mode" must be disabled for other add-ons
+  (ESPHome, etc.) to reach tailnet peers. Added a note at the top of
+  Quick Start and a full FAQ entry explaining the trade-offs and why it's
+  not the same thing as the existing "Userspace WireGuard" section about
+  the ESP node itself. Reported in [#6](https://github.com/Csontikka/esphome-tailscale/issues/6).
+
 ## [0.1.0] — 2026-04-13
 
 ### Added
