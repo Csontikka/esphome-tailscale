@@ -723,6 +723,9 @@ void TailscaleComponent::publish_state_() {
         }
       }
     }
+    // force_derp_output reroutes WG data via DERP regardless of per-peer
+    // discovered direct paths — report effective routing, not discovery.
+    if (this->force_derp_output_) { direct = 0; derp = online; }
     pub_sensor(this->peers_total_sensor_, static_cast<float>(total));
     pub_sensor(this->peers_online_sensor_, static_cast<float>(online));
     pub_sensor(this->peers_direct_sensor_, static_cast<float>(direct));

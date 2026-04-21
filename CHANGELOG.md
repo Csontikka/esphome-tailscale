@@ -10,6 +10,69 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Added
+
+- **CGNAT fallback for mobile hotspots** — merged
+  [#8](https://github.com/Csontikka/esphome-tailscale/pull/8) from
+  @aviadra. When the device is behind carrier-grade NAT (phone
+  hotspot, cellular, hotel WiFi), Tailscale's coordinator still
+  advertises each peer's direct UDP endpoint but packets sent there
+  are silently dropped. WireGuard's cached direct path then fails with
+  `errno=113` (ESP-IDF lwIP surfaces `ERR_CONN` as errno 113, which is
+  not always aliased to `EHOSTUNREACH` in newlib) until it eventually
+  rotates to DERP on its own — tens of seconds to minutes of dead
+  outbound traffic. Two complementary mechanisms now handle this:
+  - **Sticky `force_derp_output` intent.** The flag can now be set
+    before the WG netif exists (e.g. from a `wifi.on_connect` hook
+    that detects a hotspot SSID). The intent is stored in
+    `microlink_s::pending_force_derp_output` and applied at
+    `ml_wg_mgr_create_netif()` time.
+    `microlink_is_force_derp_output()` reads the stored intent so the
+    returned value is truthful pre-init.
+  - **`errno=113` self-heal in `ml_tcp`.** The retriable-errno set was
+    broadened to include literal 113 and `ECONNABORTED`. When a
+    connect fails with 113 and `force_derp_output` is not already on,
+    the TCP layer flips it on before the retry so the second attempt
+    rides DERP and succeeds. Home-WiFi paths are unaffected (first
+    connect wins, branch never taken).
+
+  Verified on ESP32-S3 hotspot cold boot: no `errno=113` storm, first
+  outbound TCP connection lands via DERP on its first attempt.
+- **`force_derp_output` YAML option** — new
+  `tailscale: force_derp_output: true` config flag unconditionally
+  routes all outbound WG packets through the DERP TLS relay at setup,
+  for users whose network environment is known to block direct UDP
+  (corporate WiFi, CGNAT'd cellular, hotspots). Defaults to `false`
+  so home-WiFi users keep the fast direct-UDP path. See the new
+  "Mobile hotspots and CGNAT" README subsection under "Direct
+  connections versus DERP relays."
+
+  **Performance warning.** Enabling this multiplexes all outbound WG
+  traffic through a single DERP TLS channel. Measured on an
+  ESP32-S3 with 14 online peers on home WiFi: `ping` RTT went from
+  3-15 ms (direct UDP) to min 294 ms / avg 2336 ms / max 10787 ms
+  with 13 % packet loss (DERP TX pipeline saturation). Use **only**
+  when direct UDP is actually impossible — this is not a
+  "safer default."
+- **Honest `Peers Direct` / `Peers DERP` counts in force-DERP mode.**
+  When `force_derp_output=true` the WG data plane routes 100 % via
+  DERP, but microlink's DISCO probe can still discover direct paths
+  on non-CGNAT networks, which used to leave the sensors showing
+  e.g. "4 direct / 11 DERP" while the actual traffic was "0 / 15".
+  The component now overrides the counts in force-DERP mode to
+  match the effective data-plane routing (0 direct / N DERP). On
+  true CGNAT the override is a no-op — DISCO already finds zero
+  direct paths. Normal mode (`force_derp_output=false`) is
+  unchanged.
+
+### Changed
+
+- **Named the WG `ERR_CONN` errno constant.** `ml_tcp.c` now defines
+  `ML_ERRNO_WG_ERR_CONN` (value 113) and matches against it by name
+  instead of the literal, with an inline comment explaining the
+  ESP-IDF lwIP + wireguardif / newlib interaction so the magic number
+  no longer needs re-deriving from commit archaeology.
+
 ### Documentation
 
 - **HAOS Tailscale add-on userspace networking prerequisite** — merged
@@ -25,6 +88,10 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
   WireGuard" section (which is about the ESP's microlink stack, not
   the HA add-on checkbox), plus a short trade-off note on what is
   actually given up by disabling userspace mode on HAOS.
+- **Mobile hotspots and CGNAT** — new README subsection under "Direct
+  connections versus DERP relays" explaining the CGNAT fallback
+  behavior, when to flip `force_derp_output` manually via YAML, and
+  why the automatic `errno=113` self-heal is safe on home networks.
 
 ## [0.1.0] — 2026-04-13
 

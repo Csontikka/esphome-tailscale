@@ -625,12 +625,23 @@ How to tell which mode is in use: the `HA API Connection Route` text sensor repo
 
 #### Mobile hotspots and CGNAT
 
-On phone tethering or carrier-grade NAT, the coordinator still advertises each peer's direct UDP endpoint, but packets sent there are silently dropped. Two behaviors cover that case:
+On phone tethering or carrier-grade NAT, the coordinator still advertises each peer's direct UDP endpoint, but packets sent there are sometimes silently dropped. Two mechanisms cover that case:
 
-- **Automatic self-heal (default).** The first outbound TCP connection over the VPN fails fast with an ESP-IDF socket error, the component triggers a fresh WireGuard handshake, flips outbound routing onto DERP, and retries once. The second attempt succeeds. You see roughly a 3-second one-time delay in the log; after that the tunnel behaves normally for the rest of the session.
-- **Preemptive mode (opt-in).** If you already know the device is on a hotspot or a CGNAT uplink, set `force_derp_output: true` under `tailscale:` in the YAML. The flag takes effect as soon as the WireGuard interface is built, so direct UDP is never attempted — no initial self-heal delay, straight to DERP.
+- **Automatic self-heal (default, recommended).** The first outbound TCP connection over the VPN fails fast with an ESP-IDF socket error (errno 113), the component triggers a fresh WireGuard handshake, flips outbound routing onto DERP, and retries once. The second attempt succeeds. You see roughly a 3-second one-time delay in the log; after that the tunnel behaves normally for the rest of the session. This covers the overwhelming majority of CGNAT and hotspot scenarios with no configuration.
+- **Preemptive mode (opt-in, last resort).** If the self-heal still isn't enough — e.g. the carrier filters all outbound UDP on the WireGuard port regardless of destination — set `force_derp_output: true` under `tailscale:` in the YAML. The flag takes effect as soon as the WireGuard interface is built, so direct UDP is never attempted for any peer.
 
-The preemptive flag is sticky for the life of the session. If you deploy a device that moves between a mobile hotspot and a normal WiFi, either leave `force_derp_output: false` and accept the one-time self-heal cost on hotspot, or reboot the device when switching back to a network that supports direct UDP.
+**`force_derp_output` is not a "safer default."** Enabling it multiplexes every peer's outbound traffic through a single DERP TLS channel, which on an ESP32-S3 with ~15 online peers on home WiFi was measured at:
+
+| Mode | ping RTT min / avg / max | Packet loss |
+|---|---|---|
+| `force_derp_output: false` (direct UDP) | 3 / 12 / 30 ms | 0 % |
+| `force_derp_output: true` (forced DERP) | 294 / 2336 / 10787 ms | 13 % |
+
+The order-of-magnitude degradation is the DERP TX pipeline saturating under normal keep-alive load. Only enable the flag when you have *proven* that direct UDP cannot reach any peer from the network the device will run on — this is not the same as "CGNAT is involved."
+
+Direct UDP can still work through CGNAT for peers with publicly reachable endpoints (cloud VMs, VPS, datacenter servers). Symmetric NAT on both ends is what actually breaks hole-punching; a one-sided CGNAT is usually traversable. The self-heal path only kicks in for peers where direct is genuinely unreachable.
+
+**Sensor behavior in force-DERP mode.** `VPN Peers Direct` and `VPN Peers DERP` normally report the peer endpoint type discovered by DISCO probes, which on a non-CGNAT network will still find direct paths even with `force_derp_output: true`. To avoid the sensors displaying "4 direct / 11 DERP" while the actual data plane is routing 0 / 15, the component overrides the counts in force-DERP mode to match the effective routing (0 direct, all online peers counted as DERP). On a real CGNAT where DISCO already fails, the override is a no-op. The preemptive flag is sticky for the life of the session — reboot the device when switching between a hotspot and a network with direct UDP support.
 
 ### Hardware realities
 
