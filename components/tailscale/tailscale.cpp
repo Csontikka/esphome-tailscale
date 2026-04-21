@@ -152,14 +152,6 @@ void TailscaleComponent::start_microlink_() {
   microlink_set_state_callback(this->ml_, TailscaleComponent::state_callback, this);
   microlink_set_peer_callback(this->ml_, TailscaleComponent::peer_callback, this);
 
-  // Preemptive CGNAT fallback: when configured, force all outbound WG packets
-  // through the DERP relay instead of attempting direct UDP first. The intent
-  // is sticky (applied once the WG netif comes up), so setting it here is
-  // enough — no need to wait for microlink_start.
-  if (this->force_derp_output_) {
-    microlink_force_derp_output(this->ml_, true);
-  }
-
   esp_err_t err = microlink_start(this->ml_);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to start MicroLink: %d", err);
@@ -281,7 +273,7 @@ void TailscaleComponent::loop() {
         microlink_peer_info_t info;
         if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
           online++;
-          if (this->peer_is_effective_direct_(info)) direct++; else relay++;
+          if (info.direct_path) direct++; else relay++;
         }
       }
       if (online >= this->max_peers_) {
@@ -346,9 +338,6 @@ void TailscaleComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  Max Peers: %u", this->max_peers_);
   if (!this->login_server_.empty()) {
     ESP_LOGCONFIG(TAG, "  Login Server: %s", this->login_server_.c_str());
-  }
-  if (this->force_derp_output_) {
-    ESP_LOGCONFIG(TAG, "  Force DERP Output: enabled (CGNAT fallback)");
   }
   ESP_LOGCONFIG(TAG, "  Debug Log: switch-controlled (NVS-persisted)");
 }
@@ -643,7 +632,7 @@ void TailscaleComponent::publish_state_() {
         if (dot != std::string::npos) name = name.substr(0, dot);
         char ip_str[16];
         microlink_ip_to_str(info.vpn_ip, ip_str);
-        std::string entry = name + "(" + ip_str + ")" + (this->peer_is_effective_direct_(info) ? "D" : "R");
+        std::string entry = name + "(" + ip_str + ")" + (info.direct_path ? "D" : "R");
         if (!list.empty()) list += "|";
         if (list.size() + entry.size() > 240) {
           list += "...";
@@ -719,7 +708,7 @@ void TailscaleComponent::publish_state_() {
         microlink_peer_info_t info;
         if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
           online++;
-          if (this->peer_is_effective_direct_(info)) direct++; else derp++;
+          if (info.direct_path) direct++; else derp++;
         }
       }
     }
@@ -871,15 +860,6 @@ void TailscaleComponent::request_reconnect() {
   }
 }
 
-bool TailscaleComponent::peer_is_effective_direct_(const microlink_peer_info_t &info) const {
-  // info.direct_path reflects DISCO discovery (a separate UDP socket that
-  // bypasses the WG tunnel), so it can be true even when the WG data plane
-  // is pinned to DERP via force_derp_output. Any sensor that claims to
-  // report the effective data-plane route must go through this helper —
-  // otherwise we lie to the user in force_derp mode.
-  return info.direct_path && !this->force_derp_output_;
-}
-
 std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
   if (out_ip != nullptr) out_ip->clear();
 #ifdef USE_API
@@ -942,7 +922,7 @@ std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
           microlink_peer_info_t info;
           if (microlink_get_peer_info(this->ml_, pi, &info) == ESP_OK) {
             if (info.vpn_ip == ml_ip) {
-              ts_route = this->peer_is_effective_direct_(info) ? "Tailscale Direct" : "Tailscale DERP";
+              ts_route = info.direct_path ? "Tailscale Direct" : "Tailscale DERP";
               found = true;
               break;
             }

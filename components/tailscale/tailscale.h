@@ -42,7 +42,6 @@ class TailscaleComponent : public Component {
   void set_hostname(const std::string &hostname) { this->hostname_ = hostname; }
   void set_max_peers(uint8_t max) { this->max_peers_ = max; }
   void set_login_server(const std::string &server) { this->login_server_ = server; }
-  void set_force_derp_output(bool enabled) { this->force_derp_output_ = enabled; }
   void set_debug_log_switch(switch_::Switch *sw) { this->debug_log_switch_ = sw; }
   void apply_debug_log(bool enabled);
   void apply_runtime_auth_key(const std::string &key);
@@ -142,14 +141,12 @@ class TailscaleComponent : public Component {
   void save_runtime_auth_key_(const std::string &key);
   void try_save_auth_key_();
   void publish_auth_key_status_();
-  bool peer_is_effective_direct_(const microlink_peer_info_t &info) const;
 
   // Config
   std::string auth_key_;
   std::string hostname_;
   uint8_t max_peers_{16};
   std::string login_server_;
-  bool force_derp_output_{false};
 
   // Runtime
   microlink_t *ml_{nullptr};

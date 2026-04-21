@@ -12,7 +12,7 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ### Added
 
-- **CGNAT fallback for mobile hotspots** — merged
+- **Automatic CGNAT self-heal** — merged
   [#8](https://github.com/Csontikka/esphome-tailscale/pull/8) from
   @aviadra. When the device is behind carrier-grade NAT (phone
   hotspot, cellular, hotel WiFi), Tailscale's coordinator still
@@ -21,53 +21,15 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
   `errno=113` (ESP-IDF lwIP surfaces `ERR_CONN` as errno 113, which is
   not always aliased to `EHOSTUNREACH` in newlib) until it eventually
   rotates to DERP on its own — tens of seconds to minutes of dead
-  outbound traffic. Two complementary mechanisms now handle this:
-  - **Sticky `force_derp_output` intent.** The flag can now be set
-    before the WG netif exists (e.g. from a `wifi.on_connect` hook
-    that detects a hotspot SSID). The intent is stored in
-    `microlink_s::pending_force_derp_output` and applied at
-    `ml_wg_mgr_create_netif()` time.
-    `microlink_is_force_derp_output()` reads the stored intent so the
-    returned value is truthful pre-init.
-  - **`errno=113` self-heal in `ml_tcp`.** The retriable-errno set was
-    broadened to include literal 113 and `ECONNABORTED`. When a
-    connect fails with 113 and `force_derp_output` is not already on,
-    the TCP layer flips it on before the retry so the second attempt
-    rides DERP and succeeds. Home-WiFi paths are unaffected (first
-    connect wins, branch never taken).
+  outbound traffic. `ml_tcp`'s retriable-errno set now includes literal
+  113 and `ECONNABORTED`; when a connect fails with 113 and the WG
+  output is not already pinned to DERP, the TCP layer flips
+  `force_derp_output` on before the retry so the second attempt rides
+  DERP and succeeds (~3 s total instead of tens of seconds). Home-WiFi
+  paths are unaffected (first connect wins, branch never taken).
 
   Verified on ESP32-S3 hotspot cold boot: no `errno=113` storm, first
   outbound TCP connection lands via DERP on its first attempt.
-- **`force_derp_output` YAML option** — new
-  `tailscale: force_derp_output: true` config flag unconditionally
-  routes all outbound WG packets through the DERP TLS relay at setup,
-  for users whose network environment is known to block direct UDP
-  (corporate WiFi, CGNAT'd cellular, hotspots). Defaults to `false`
-  so home-WiFi users keep the fast direct-UDP path. See the new
-  "Mobile hotspots and CGNAT" README subsection under "Direct
-  connections versus DERP relays."
-
-  **Performance warning.** Enabling this multiplexes all outbound WG
-  traffic through a single DERP TLS channel. Measured on an
-  ESP32-S3 with 14 online peers on home WiFi: `ping` RTT went from
-  3-15 ms (direct UDP) to min 294 ms / avg 2336 ms / max 10787 ms
-  with 13 % packet loss (DERP TX pipeline saturation). Use **only**
-  when direct UDP is actually impossible — this is not a
-  "safer default."
-- **Honest routing sensors in force-DERP mode.** When
-  `force_derp_output=true` the WG data plane routes 100 % via DERP,
-  but microlink's DISCO probe (a separate UDP socket that bypasses
-  the WG tunnel) can still discover direct paths on non-CGNAT
-  networks. Previously this left multiple sensors lying to the
-  user: `Peers Direct` / `Peers DERP` showed e.g. "4 direct / 11
-  DERP" while actual traffic was "0 / 15", and `HA API Connection
-  Route` reported "Tailscale Direct" when the real data-plane path
-  was DERP. Both now route through a single
-  `peer_is_effective_direct_()` helper that returns
-  `info.direct_path && !force_derp_output`, so any future sensor
-  answering the routing question stays consistent. On true CGNAT
-  this is a no-op (DISCO finds zero direct paths anyway). Normal
-  mode (`force_derp_output=false`) is unchanged.
 
 ### Changed
 
@@ -93,9 +55,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
   the HA add-on checkbox), plus a short trade-off note on what is
   actually given up by disabling userspace mode on HAOS.
 - **Mobile hotspots and CGNAT** — new README subsection under "Direct
-  connections versus DERP relays" explaining the CGNAT fallback
-  behavior, when to flip `force_derp_output` manually via YAML, and
-  why the automatic `errno=113` self-heal is safe on home networks.
+  connections versus DERP relays" explaining the automatic
+  `errno=113` self-heal: no configuration needed, ~3 s to first
+  useful connection on hotspots, home WiFi unaffected.
 
 ## [0.1.0] — 2026-04-13
 

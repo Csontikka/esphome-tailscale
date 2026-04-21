@@ -385,7 +385,6 @@ tailscale:
   hostname: "esp32-tailscale"            # optional, default empty → control plane auto-assigns
   max_peers: 16                          # optional, default 16, range 1–64
   login_server: ""                       # optional, empty → Tailscale SaaS; set for Headscale / self-hosted
-  force_derp_output: false               # optional, default false; set to true on mobile hotspot / CGNAT deployments
 ```
 
 | Option | Default | Description |
@@ -394,7 +393,6 @@ tailscale:
 | `hostname` | `""` | Name the node registers as. Empty → Tailscale picks one. |
 | `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes *and* you have PSRAM. |
 | `login_server` | `""` | Custom control-plane host. Empty uses the official Tailscale SaaS coordinator. Set to a Headscale (or other Tailscale-compatible) coordinator to point the node elsewhere. Accepts a bare hostname, an IP, `host:port`, or a full `http://host[:port]` URL; `https://` is rejected. Authentication and initial registration work end-to-end against Headscale 0.23.0; see *Custom control plane (Headscale)* under Deployment Notes for the current caveats. Leave empty for Tailscale SaaS. |
-| `force_derp_output` | `false` | Preemptively route all outbound WireGuard traffic through the DERP relay instead of attempting direct UDP first. Useful on mobile hotspots or carrier-grade NAT where direct UDP is silently dropped. When left `false`, the component still auto-falls-back to DERP after the first failed connect — see *Direct connections versus DERP relays* under Deployment Notes. |
 
 > **No `update_interval`.** The component is fully event-driven: sensors publish only when the underlying state actually changes. There is no polling loop to tune — and nothing to reduce CPU/network cost by raising.
 
@@ -625,23 +623,11 @@ How to tell which mode is in use: the `HA API Connection Route` text sensor repo
 
 #### Mobile hotspots and CGNAT
 
-On phone tethering or carrier-grade NAT, the coordinator still advertises each peer's direct UDP endpoint, but packets sent there are sometimes silently dropped. Two mechanisms cover that case:
+On phone tethering or carrier-grade NAT, the coordinator still advertises each peer's direct UDP endpoint, but packets sent there are sometimes silently dropped. The component handles this automatically with **no configuration required**: the first outbound TCP connection over the VPN fails fast with an ESP-IDF socket error (errno 113), the component triggers a fresh WireGuard handshake, flips outbound routing onto DERP, and retries once. The second attempt succeeds. You see roughly a 3-second one-time delay in the log; after that the tunnel behaves normally for the rest of the session.
 
-- **Automatic self-heal (default, recommended).** The first outbound TCP connection over the VPN fails fast with an ESP-IDF socket error (errno 113), the component triggers a fresh WireGuard handshake, flips outbound routing onto DERP, and retries once. The second attempt succeeds. You see roughly a 3-second one-time delay in the log; after that the tunnel behaves normally for the rest of the session. This covers the overwhelming majority of CGNAT and hotspot scenarios with no configuration.
-- **Preemptive mode (opt-in, last resort).** If the self-heal still isn't enough — e.g. the carrier filters all outbound UDP on the WireGuard port regardless of destination — set `force_derp_output: true` under `tailscale:` in the YAML. The flag takes effect as soon as the WireGuard interface is built, so direct UDP is never attempted for any peer.
+Home-WiFi and direct-UDP-reachable networks are unaffected — the self-heal branch is only taken when the first connect actually fails, so the fast direct path stays fast there.
 
-**`force_derp_output` is not a "safer default."** Enabling it multiplexes every peer's outbound traffic through a single DERP TLS channel, which on an ESP32-S3 with ~15 online peers on home WiFi was measured at:
-
-| Mode | ping RTT min / avg / max | Packet loss |
-|---|---|---|
-| `force_derp_output: false` (direct UDP) | 3 / 12 / 30 ms | 0 % |
-| `force_derp_output: true` (forced DERP) | 294 / 2336 / 10787 ms | 13 % |
-
-The order-of-magnitude degradation is the DERP TX pipeline saturating under normal keep-alive load. Only enable the flag when you have *proven* that direct UDP cannot reach any peer from the network the device will run on — this is not the same as "CGNAT is involved."
-
-Direct UDP can still work through CGNAT for peers with publicly reachable endpoints (cloud VMs, VPS, datacenter servers). Symmetric NAT on both ends is what actually breaks hole-punching; a one-sided CGNAT is usually traversable. The self-heal path only kicks in for peers where direct is genuinely unreachable.
-
-**Sensor behavior in force-DERP mode.** `VPN Peers Direct` and `VPN Peers DERP` normally report the peer endpoint type discovered by DISCO probes, which on a non-CGNAT network will still find direct paths even with `force_derp_output: true`. To avoid the sensors displaying "4 direct / 11 DERP" while the actual data plane is routing 0 / 15, the component overrides the counts in force-DERP mode to match the effective routing (0 direct, all online peers counted as DERP). On a real CGNAT where DISCO already fails, the override is a no-op. The preemptive flag is sticky for the life of the session — reboot the device when switching between a hotspot and a network with direct UDP support.
+Direct UDP can still work through CGNAT for peers with publicly reachable endpoints (cloud VMs, VPS, datacenter servers). Symmetric NAT on both ends is what actually breaks hole-punching; a one-sided CGNAT is usually traversable.
 
 ### Hardware realities
 
