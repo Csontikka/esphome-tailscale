@@ -719,13 +719,10 @@ void TailscaleComponent::publish_state_() {
         microlink_peer_info_t info;
         if (microlink_get_peer_info(this->ml_, i, &info) == ESP_OK && info.online) {
           online++;
-          if (info.direct_path) direct++; else derp++;
+          if (this->peer_is_effective_direct_(info)) direct++; else derp++;
         }
       }
     }
-    // force_derp_output reroutes WG data via DERP regardless of per-peer
-    // discovered direct paths — report effective routing, not discovery.
-    if (this->force_derp_output_) { direct = 0; derp = online; }
     pub_sensor(this->peers_total_sensor_, static_cast<float>(total));
     pub_sensor(this->peers_online_sensor_, static_cast<float>(online));
     pub_sensor(this->peers_direct_sensor_, static_cast<float>(direct));
@@ -874,6 +871,15 @@ void TailscaleComponent::request_reconnect() {
   }
 }
 
+bool TailscaleComponent::peer_is_effective_direct_(const microlink_peer_info_t &info) const {
+  // info.direct_path reflects DISCO discovery (a separate UDP socket that
+  // bypasses the WG tunnel), so it can be true even when the WG data plane
+  // is pinned to DERP via force_derp_output. Any sensor that claims to
+  // report the effective data-plane route must go through this helper —
+  // otherwise we lie to the user in force_derp mode.
+  return info.direct_path && !this->force_derp_output_;
+}
+
 std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
   if (out_ip != nullptr) out_ip->clear();
 #ifdef USE_API
@@ -936,7 +942,7 @@ std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
           microlink_peer_info_t info;
           if (microlink_get_peer_info(this->ml_, pi, &info) == ESP_OK) {
             if (info.vpn_ip == ml_ip) {
-              ts_route = info.direct_path ? "Tailscale Direct" : "Tailscale DERP";
+              ts_route = this->peer_is_effective_direct_(info) ? "Tailscale Direct" : "Tailscale DERP";
               found = true;
               break;
             }

@@ -142,6 +142,7 @@ class TailscaleComponent : public Component {
   void save_runtime_auth_key_(const std::string &key);
   void try_save_auth_key_();
   void publish_auth_key_status_();
+  bool peer_is_effective_direct_(const microlink_peer_info_t &info) const;
 
   // Config
   std::string auth_key_;

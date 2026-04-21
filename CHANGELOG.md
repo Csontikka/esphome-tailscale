@@ -54,16 +54,20 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
   with 13 % packet loss (DERP TX pipeline saturation). Use **only**
   when direct UDP is actually impossible — this is not a
   "safer default."
-- **Honest `Peers Direct` / `Peers DERP` counts in force-DERP mode.**
-  When `force_derp_output=true` the WG data plane routes 100 % via
-  DERP, but microlink's DISCO probe can still discover direct paths
-  on non-CGNAT networks, which used to leave the sensors showing
-  e.g. "4 direct / 11 DERP" while the actual traffic was "0 / 15".
-  The component now overrides the counts in force-DERP mode to
-  match the effective data-plane routing (0 direct / N DERP). On
-  true CGNAT the override is a no-op — DISCO already finds zero
-  direct paths. Normal mode (`force_derp_output=false`) is
-  unchanged.
+- **Honest routing sensors in force-DERP mode.** When
+  `force_derp_output=true` the WG data plane routes 100 % via DERP,
+  but microlink's DISCO probe (a separate UDP socket that bypasses
+  the WG tunnel) can still discover direct paths on non-CGNAT
+  networks. Previously this left multiple sensors lying to the
+  user: `Peers Direct` / `Peers DERP` showed e.g. "4 direct / 11
+  DERP" while actual traffic was "0 / 15", and `HA API Connection
+  Route` reported "Tailscale Direct" when the real data-plane path
+  was DERP. Both now route through a single
+  `peer_is_effective_direct_()` helper that returns
+  `info.direct_path && !force_derp_output`, so any future sensor
+  answering the routing question stays consistent. On true CGNAT
+  this is a no-op (DISCO finds zero direct paths anyway). Normal
+  mode (`force_derp_output=false`) is unchanged.
 
 ### Changed
 
