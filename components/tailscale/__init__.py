@@ -41,6 +41,12 @@ async def to_code(config):
     if config[CONF_LOGIN_SERVER]:
         cg.add(var.set_login_server(config[CONF_LOGIN_SERVER]))
 
+    # microlink sizes the static `ml_peer_t peers[ML_MAX_PEERS]` array at compile
+    # time from CONFIG_ML_MAX_PEERS (default 16), and microlink_init() clamps the
+    # runtime config to that compile-time ceiling. Propagate the YAML value into
+    # sdkconfig so the compiled ceiling matches the runtime intent.
+    add_idf_sdkconfig_option("CONFIG_ML_MAX_PEERS", config[CONF_MAX_PEERS])
+
     # Sensors are created via platform YAML files (binary_sensor.py, text_sensor.py, sensor.py)
     # They are auto-loaded and auto-configured - user doesn't need to add them manually
 

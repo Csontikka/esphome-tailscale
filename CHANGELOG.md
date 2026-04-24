@@ -10,6 +10,22 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+
+- **`max_peers` YAML option silently capped at 16** — reported in
+  [#11](https://github.com/Csontikka/esphome-tailscale/issues/11). The
+  option accepted values up to 64 at codegen time, but microlink's
+  `ml_peer_t peers[ML_MAX_PEERS]` array is sized at compile time from
+  the `CONFIG_ML_MAX_PEERS` Kconfig symbol (default 16), and
+  `microlink_init()` clamped the runtime `config.max_peers` to that
+  ceiling. Result: setting `max_peers: 64` in YAML produced a firmware
+  that still capped peers at 16, with no warning. The Python codegen
+  now propagates `max_peers` into `sdkconfig` via
+  `add_idf_sdkconfig_option("CONFIG_ML_MAX_PEERS", ...)`, so the
+  compiled ceiling matches the YAML value. Verified on ESP32-S3 with
+  PSRAM: `max_peers: 32` → `VPN Peers Max` sensor reports `32` and
+  `VPN Peer Status` flips from `Warning` (15/16) to `OK` (15/32).
+
 ## [0.1.1] — 2026-04-21
 
 ### Added
