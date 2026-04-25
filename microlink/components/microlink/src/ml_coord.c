@@ -1646,6 +1646,8 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
     h2_pos += data_len;
 
     if (noise_send(ml, noise, h2_buf, h2_pos) < 0) {
+        ESP_LOGW(TAG, "do_fetch_peers: noise_send failed (TLS/H2 transport error) after %lld ms",
+                 (esp_timer_get_time() - t_map_start) / 1000);
         free(h2_buf);
         return -1;
     }
@@ -1684,11 +1686,19 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
     size_t window_consumed = 0;
 
     bool got_chunk = false;
+    int last_recv_rc = 0;
+    int last_iter = 0;
     for (int read_count = 0; read_count < 400; read_count++) {
+        last_iter = read_count;
         uint8_t *frame_buf = ml_psram_malloc(65536);
-        if (!frame_buf) break;
+        if (!frame_buf) {
+            ESP_LOGW(TAG, "do_fetch_peers: alloc failed (frame_buf 64KB) at iter=%d, h2_total=%uKB",
+                     read_count, (unsigned)(h2_total / 1024));
+            break;
+        }
 
         int frame_len = noise_recv(ml, noise, frame_buf, 65536);
+        last_recv_rc = frame_len;
         if (frame_len <= 0) {
             free(frame_buf);
             break;
@@ -1778,14 +1788,26 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
     rcv_tv.tv_sec = 5;
     ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 
-    free(h2_recv);
-
     if (!got_chunk || expected_body_len == 0 || json_total < 4 + expected_body_len) {
-        ESP_LOGW(TAG, "Initial MapResponse incomplete: got %d body bytes, expected %lu",
-                 (int)json_total, (unsigned long)expected_body_len);
+        uint64_t elapsed = ml_get_time_ms() - recv_start_ms;
+        ESP_LOGW(TAG, "do_fetch_peers: MapResponse incomplete after %llums (iters=%d, last_recv_rc=%d): "
+                      "stream5_body=%d/%lu bytes, total_h2=%uKB",
+                 (unsigned long long)elapsed, last_iter, last_recv_rc,
+                 (int)json_total, (unsigned long)expected_body_len, (unsigned)(h2_total / 1024));
+        if (h2_total > 0) {
+            char hex[3 * 32 + 1];
+            size_t dump = (h2_total < 32) ? h2_total : 32;
+            for (size_t i = 0; i < dump; i++) snprintf(hex + i * 3, 4, "%02x ", h2_recv[i]);
+            hex[dump * 3] = 0;
+            ESP_LOGW(TAG, "do_fetch_peers: first %u bytes of h2 buffer (hex): %s",
+                     (unsigned)dump, hex);
+        }
+        free(h2_recv);
         free(resp_buf);
         return -1;
     }
+
+    free(h2_recv);
 
     /* Replenish HTTP/2 flow control for the data we consumed. Stream 5 stays
      * OPEN for subsequent long-poll deltas, so update both windows. */
