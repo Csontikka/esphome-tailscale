@@ -65,7 +65,7 @@ Boards currently verified:
 - **ESP32-S3-DevKitC-1** (8 MB PSRAM, 16 MB flash) — the reference / test board
 - **ESP32-S3-N16R8**
 
-> **Why PSRAM?** The Tailscale control protocol and WireGuard crypto state together need more RAM than internal SRAM has after WiFi, TLS, and the ESPHome runtime are loaded. The example YAMLs enable PSRAM by default with a `mode: quad speed: 40MHz` config that works on every ESP32-S3 PSRAM variant (octal chips run in quad mode at reduced bandwidth — still fast enough; the network is the bottleneck). Without PSRAM the firmware falls back to small buffers (64 KB H2 + 64 KB JSON) and a ~30-peer effective tailnet limit — viable for sensor heartbeats but rough for larger deployments.
+> **Why PSRAM?** The Tailscale control protocol and WireGuard crypto state together need more RAM than a plain ESP32 has. Without PSRAM the component falls back to small buffers and caps around 30 peers — fine for small tailnets, rough for larger ones.
 
 ### Software
 
@@ -427,8 +427,8 @@ The `VPN Peers Direct` and `VPN Peers DERP` sensors tell you at a glance how you
 
 On boot the component queries `esp_psram_get_size()` and reports one of two modes:
 
-- **`PSRAM <size>KB`** — large buffers, full peer list support, up to 64 peers. **This is the default**; the example YAMLs enable a `psram:` block so PSRAM-equipped boards land here.
-- **`Internal RAM`** — small buffers, ~30-peer effective limit. Only entered if your board lacks PSRAM hardware, or if you've explicitly removed the `psram:` block from your YAML. Suitable for sensor heartbeats and small payloads, not recommended for larger tailnets.
+- **`PSRAM <size>KB`** — large buffers, full peer list support, up to 64 peers.
+- **`Internal RAM`** — small buffers, ~30-peer effective limit, works but not recommended.
 
 Check the `Device Memory` sensor after first boot to confirm. If you expect PSRAM but see `Internal RAM`, see [Troubleshooting → `Device Memory` shows `Internal RAM` even though your board has PSRAM](#device-memory-shows-internal-ram-even-though-your-board-has-psram).
 

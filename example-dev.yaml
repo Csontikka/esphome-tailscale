@@ -126,9 +126,7 @@ switch:
       name: "VPN Debug Log"
       restore_mode: RESTORE_DEFAULT_OFF
 
-# PSRAM init — dev hardware here is N16R8 octal/80MHz, so we run at native
-# speed for release verification. End-user example.yaml uses the safer
-# quad/40MHz default that works on every variant.
+# PSRAM init — dev hardware here is N16R8 octal/80MHz.
 psram:
   mode: octal
   speed: 80MHz

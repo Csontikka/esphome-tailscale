@@ -10,6 +10,32 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-04-26
+
+### Reverted
+
+- **Reverted v0.1.4's PSRAM-default-on change.** Post-publication
+  testing showed that an explicit `psram: mode: quad speed: 40MHz`
+  block does NOT work on octal-PSRAM hardware (`N8R8` / `N16R8`) —
+  ESPHome's `psram:` component **forces the configured mode** rather
+  than auto-detecting, so an octal chip configured for quad mode
+  fails to initialize and `esp_psram_get_size()` returns 0
+  (`Available: NO`, `Device Memory: Internal RAM`). The v0.1.4
+  default would have broken the most common ESP32-S3 dev board
+  (N16R8) for users who copied the example. `example.yaml` is back to
+  a commented `psram:` hint that lists the matching block for each
+  variant. The README "Why PSRAM?" and "Memory modes" sections are
+  back to their v0.1.3 wording. The Troubleshooting entry that
+  explains the per-variant `psram:` block (added in v0.1.3) remains
+  the correct path: there is no universal default that works for
+  both quad and octal chips.
+
+  Lesson: ESPHome's `psram:` block is hardware-specific, not
+  fallback-tolerant. Don't ship YAML defaults that lock to a single
+  chip mode. **If you're already on v0.1.4 and your board worked,
+  staying on v0.1.4 is fine** — this revert only matters for users
+  copying the new example.
+
 ## [0.1.4] — 2026-04-26
 
 ### Changed
