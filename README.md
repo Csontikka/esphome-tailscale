@@ -701,7 +701,9 @@ psram:
   speed: 40MHz
 ```
 
-After flashing, the `Device Memory` sensor should report `PSRAM XXkB` and the VPN should connect normally. If you don't know which variant your board is, the quad/40MHz combination works on more hardware (octal chips can run in quad mode, just at lower bandwidth) — try that first if in doubt. Reported and resolved in [#9](https://github.com/Csontikka/esphome-tailscale/issues/9).
+After flashing, the `Device Memory` sensor should report `PSRAM XXkB` and the VPN should connect normally.
+
+**If you don't know which variant your board is**, the safe path is trial-and-error: try `mode: octal speed: 80MHz` first (most common ESP32-S3 dev boards are `N8R8` / `N16R8` octal), reflash, check the sensor. If it still says `Internal RAM`, switch to `mode: quad speed: 40MHz` and reflash again. One of the two will work — ESPHome's `psram:` block **forces the configured mode**, it does not auto-detect or fall back, so an octal chip configured for quad mode (or vice versa) simply fails to initialize PSRAM. Reported and resolved in [#9](https://github.com/Csontikka/esphome-tailscale/issues/9).
 
 ### Auth key expired
 

@@ -10,6 +10,20 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Documentation
+
+- **Fixed misleading advice in the PSRAM troubleshooting section.** The
+  v0.1.3 entry told users "if unsure of variant, try `mode: quad
+  speed: 40MHz` first because octal chips can run in quad mode at
+  lower bandwidth" — that turned out to be **wrong** (verified during
+  v0.1.4 testing). ESPHome's `psram:` block forces the configured
+  mode and an octal chip configured for quad mode does NOT initialize
+  PSRAM. Replaced with honest trial-and-error guidance: try
+  `mode: octal speed: 80MHz` first (the most common variant on
+  ESP32-S3 dev boards), and if PSRAM stays undetected switch to
+  `mode: quad speed: 40MHz`. One of the two will work; the YAML
+  block must match the chip variant exactly.
+
 ## [0.1.5] — 2026-04-26
 
 ### Reverted
