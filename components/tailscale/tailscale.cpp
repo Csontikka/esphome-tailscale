@@ -39,6 +39,7 @@ static void microlink_stop_task(void *arg) {
 
 void TailscaleComponent::apply_debug_log(bool enabled) {
   esp_log_level_t level = enabled ? ESP_LOG_INFO : ESP_LOG_WARN;
+  esp_log_level_set("tailscale", level);
   esp_log_level_set("ml_coord", level);
   esp_log_level_set("ml_noise", level);
   esp_log_level_set("ml_h2", level);
@@ -63,7 +64,13 @@ void TailscaleComponent::setup() {
     ESP_LOGI(TAG, "PSRAM detected: %u KB - using large buffers", (unsigned)(psram_size / 1024));
   } else {
     this->psram_available_ = false;
-    ESP_LOGW(TAG, "No PSRAM - using small buffers (max ~30 peers). Add PSRAM for large tailnets.");
+    ESP_LOGW(TAG, "No PSRAM detected — using small buffers (max ~30 peers).");
+    ESP_LOGW(TAG, "If your board has PSRAM but it's not initialized, add an explicit psram block to your YAML:");
+    ESP_LOGW(TAG, "    psram:");
+    ESP_LOGW(TAG, "      mode: octal");
+    ESP_LOGW(TAG, "      speed: 80MHz    # for N8R8 / N16R8 modules (most common)");
+    ESP_LOGW(TAG, "  or, for N8R2 / N16R2 modules: 'mode: quad speed: 40MHz'.");
+    ESP_LOGW(TAG, "ESPHome's psram block forces the configured mode — pick the one that matches your hardware.");
   }
 
   // Load runtime auth key override from NVS (if user set one via HA)
