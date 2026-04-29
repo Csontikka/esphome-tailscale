@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-04-29
+
 ### Added
 
 - **Runtime PSRAM hint with concrete YAML config.** When the firmware
