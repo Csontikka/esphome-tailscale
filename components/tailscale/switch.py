@@ -17,12 +17,12 @@ TailscaleDebugLogSwitch = tailscale_ns.class_(
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_TAILSCALE_ID): cv.use_id(TailscaleComponent),
-        cv.Optional("vpn_enabled", default={"name": "VPN Enabled"}): switch.switch_schema(
+        cv.Optional("vpn_enabled"): switch.switch_schema(
             TailscaleEnableSwitch,
             entity_category="config",
             icon="mdi:vpn",
         ),
-        cv.Optional("debug_log", default={"name": "VPN Debug Log"}): switch.switch_schema(
+        cv.Optional("debug_log"): switch.switch_schema(
             TailscaleDebugLogSwitch,
             entity_category="config",
             icon="mdi:bug-outline",
@@ -38,6 +38,8 @@ async def to_code(config):
         ("vpn_enabled", "set_enable_switch"),
         ("debug_log", "set_debug_log_switch"),
     ]:
+        if key not in config:
+            continue
         sw = await switch.new_switch(config[key])
         await cg.register_component(sw, {})
         cg.add(sw.set_parent(parent))

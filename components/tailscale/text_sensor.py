@@ -15,20 +15,20 @@ TS_TIMESTAMP_SCHEMA = text_sensor.text_sensor_schema(
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_TAILSCALE_ID): cv.use_id(TailscaleComponent),
-        cv.Optional("ip_address", default={"name": "VPN IP"}): TS_SCHEMA,
-        cv.Optional("vpn_hostname", default={"name": "VPN Hostname"}): TS_SCHEMA,
-        cv.Optional("memory_mode", default={"name": "Device Memory"}): TS_SCHEMA,
-        cv.Optional("setup_status", default={"name": "VPN Setup Hint"}): TS_SCHEMA,
-        cv.Optional("peer_status", default={"name": "VPN Peer Status"}): TS_SCHEMA,
-        cv.Optional("magicdns", default={"name": "VPN MagicDNS"}): TS_SCHEMA,
+        cv.Optional("ip_address"): TS_SCHEMA,
+        cv.Optional("vpn_hostname"): TS_SCHEMA,
+        cv.Optional("memory_mode"): TS_SCHEMA,
+        cv.Optional("setup_status"): TS_SCHEMA,
+        cv.Optional("peer_status"): TS_SCHEMA,
+        cv.Optional("magicdns"): TS_SCHEMA,
         cv.Optional("peer_list"): TS_SCHEMA,
-        cv.Optional("network_name", default={"name": "VPN Network"}): TS_SCHEMA,
-        cv.Optional("key_expiry", default={"name": "VPN Node Key Expiry"}): TS_TIMESTAMP_SCHEMA,
-        cv.Optional("ha_connection_route", default={"name": "HA API Connection Route"}): TS_SCHEMA,
-        cv.Optional("ha_connection_ip", default={"name": "HA API Connection IP"}): TS_SCHEMA,
-        cv.Optional("control_plane", default={"name": "VPN Control Plane"}): TS_SCHEMA,
-        cv.Optional("login_server", default={"name": "VPN Login Server"}): TS_SCHEMA,
-        cv.Optional("auth_key_status", default={"name": "VPN Auth Key Source"}): TS_SCHEMA,
+        cv.Optional("network_name"): TS_SCHEMA,
+        cv.Optional("key_expiry"): TS_TIMESTAMP_SCHEMA,
+        cv.Optional("ha_connection_route"): TS_SCHEMA,
+        cv.Optional("ha_connection_ip"): TS_SCHEMA,
+        cv.Optional("control_plane"): TS_SCHEMA,
+        cv.Optional("login_server"): TS_SCHEMA,
+        cv.Optional("auth_key_status"): TS_SCHEMA,
     }
 )
 

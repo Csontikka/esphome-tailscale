@@ -167,6 +167,9 @@ ota:
   platform: esphome
 ```
 
+> [!TIP]
+> **Want only a subset of the Tailscale entities on the device's web UI / in Home Assistant?** Swap the `files:` entry for the minimal variant — `files: [packages/tailscale/tailscale-core.yaml]` — which loads the component without auto-registering any entities. You then declare only the ones you want yourself (any combination of `binary_sensor`, `text_sensor`, `sensor`, `switch`, `text`, `button` blocks under `platform: tailscale`). Useful when you want a clean web UI focused on your own sensors and switches. See the header comment in [`packages/tailscale/tailscale-core.yaml`](packages/tailscale/tailscale-core.yaml) for a complete example.
+
 And add to your `secrets.yaml`:
 
 ```yaml

@@ -9,28 +9,19 @@ CONF_TAILSCALE_ID = "tailscale_id"
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_TAILSCALE_ID): cv.use_id(TailscaleComponent),
-        cv.Optional("connected", default={"name": "VPN Connected"}): binary_sensor.binary_sensor_schema(
+        cv.Optional("connected"): binary_sensor.binary_sensor_schema(
             device_class="connectivity",
             entity_category="diagnostic",
         ),
-        cv.Optional(
-            "key_expiry_warning",
-            default={"name": "VPN Node Key Expiry Warning"},
-        ): binary_sensor.binary_sensor_schema(
+        cv.Optional("key_expiry_warning"): binary_sensor.binary_sensor_schema(
             device_class="problem",
             entity_category="diagnostic",
         ),
-        cv.Optional(
-            "ha_connected",
-            default={"name": "HA API Connected"},
-        ): binary_sensor.binary_sensor_schema(
+        cv.Optional("ha_connected"): binary_sensor.binary_sensor_schema(
             device_class="connectivity",
             entity_category="diagnostic",
         ),
-        cv.Optional(
-            "vpn_auto_rollback",
-            default={"name": "VPN Auto-Rollback"},
-        ): binary_sensor.binary_sensor_schema(
+        cv.Optional("vpn_auto_rollback"): binary_sensor.binary_sensor_schema(
             entity_category="diagnostic",
         ),
     }
@@ -39,8 +30,9 @@ CONFIG_SCHEMA = cv.Schema(
 
 async def to_code(config):
     parent = await cg.get_variable(config[CONF_TAILSCALE_ID])
-    sens = await binary_sensor.new_binary_sensor(config["connected"])
-    cg.add(parent.set_connected_binary_sensor(sens))
+    if "connected" in config:
+        sens = await binary_sensor.new_binary_sensor(config["connected"])
+        cg.add(parent.set_connected_binary_sensor(sens))
     if "key_expiry_warning" in config:
         warn = await binary_sensor.new_binary_sensor(config["key_expiry_warning"])
         cg.add(parent.set_key_expiry_warning_binary_sensor(warn))

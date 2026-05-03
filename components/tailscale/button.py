@@ -14,7 +14,7 @@ TailscaleReconnectButton = tailscale_ns.class_(
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_TAILSCALE_ID): cv.use_id(TailscaleComponent),
-        cv.Optional("reconnect", default={"name": "VPN Reconnect"}): button.button_schema(
+        cv.Optional("reconnect"): button.button_schema(
             TailscaleReconnectButton,
             entity_category="config",
             icon="mdi:connection",
@@ -25,6 +25,7 @@ CONFIG_SCHEMA = cv.Schema(
 
 async def to_code(config):
     parent = await cg.get_variable(config[CONF_TAILSCALE_ID])
-    btn = await button.new_button(config["reconnect"])
-    await cg.register_component(btn, {})
-    cg.add(btn.set_parent(parent))
+    if "reconnect" in config:
+        btn = await button.new_button(config["reconnect"])
+        await cg.register_component(btn, {})
+        cg.add(btn.set_parent(parent))

@@ -10,6 +10,37 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Added
+
+- **Minimal-install package variant: `tailscale-core.yaml`.** New
+  alternative import file that loads the Tailscale component, its
+  ESP-IDF lwIP tweaks, the NTP time source, and the logger baud rate
+  — but does NOT auto-register any of the diagnostic entities
+  (binary_sensor, text_sensor, sensor, switch, text, button). The
+  user then declares only the entities they want. Requested in
+  [#14](https://github.com/Csontikka/esphome-tailscale/issues/14) by
+  @tybord, who wanted a clean device web UI focused on their own
+  sensors and switches. The regular `tailscale.yaml` package still
+  registers the full entity set as before — backward-compatible.
+
+### Changed
+
+- **Per-platform schema defaults removed (breaking for direct
+  `external_components` users only).** The component's per-platform
+  Python schemas (`binary_sensor.py`, `text_sensor.py`, `sensor.py`,
+  `switch.py`, `text.py`, `button.py`) previously declared
+  `cv.Optional("entity_name", default={"name": "..."})` for every
+  Tailscale-platform entity, which silently auto-registered the
+  full default entity set even when the user listed only a few.
+  This blocked the per-entity opt-in that the new
+  `tailscale-core.yaml` package needed. Defaults are now removed —
+  every entity must be explicitly listed in the user YAML to be
+  registered. **No effect on users who import `tailscale.yaml` via
+  `packages:` — that package YAML still spells out every default
+  entity verbatim, so behavior is unchanged.** Direct
+  `external_components: source:` users who relied on the implicit
+  defaults need to add the entities they want explicitly.
+
 ## [0.1.6] — 2026-04-29
 
 ### Added
