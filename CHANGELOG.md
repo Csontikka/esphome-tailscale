@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-03
+
 ### Added
 
 - **Minimal-install package variant: `tailscale-core.yaml`.** New
