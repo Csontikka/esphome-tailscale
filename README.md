@@ -869,6 +869,9 @@ esphome-tailscale/
 **Q: Do I need a subnet router?**
 No. That's the whole point. The ESP is its own Tailscale node.
 
+**Q: Can I use the ESP as a subnet router / Tailscale connector / TCP forwarder?**
+No. This component makes the ESP itself a Tailscale node — it does not advertise subnet routes, forward TCP between the tailnet and your LAN, or act as a connector. The microlink library does not implement subnet route advertisement, and lwIP on ESP32 isn't set up for IP forwarding / NAT. If you need to expose other LAN devices to your tailnet, run a real subnet router on that network: a Pi Zero 2 W, an OpenWrt / GL.iNet / Mikrotik router with the Tailscale package, or a Home Assistant instance with the Tailscale add-on in subnet-router mode.
+
 **Q: Do I need Tailscale Funnel?**
 No. Funnel publishes services to the public internet — that's unrelated. Everything here is private, tailnet-only.
 

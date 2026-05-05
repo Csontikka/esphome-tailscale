@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Documentation
+- FAQ entry clarifying the ESP is not a subnet router / connector / TCP forwarder ([#16](https://github.com/Csontikka/esphome-tailscale/issues/16))
+
 ## [0.2.0] — 2026-05-03
 
 ### Added
