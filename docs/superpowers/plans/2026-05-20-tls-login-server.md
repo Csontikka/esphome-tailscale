@@ -461,6 +461,90 @@ ssh jonny@192.168.5.201 "docker exec esphome bash -c 'cd /config/tailscale-local
 
 ---
 
+## Task 8b: Add `ml_conn_sockfd` helper + route setsockopt/select sites
+
+**Files:**
+- Modify: `microlink/components/microlink/src/ml_coord.c`
+
+Task 1 recon found that `ml_coord.c` references `ml->coord_sock` in 6 `ml_setsockopt` calls (lines 307, 728, 746, 1698, 1805, 2194) and 2 `FD_SET`/`ml_select_fds` calls (2187-2189). With TLS the raw `coord_sock` is `-1`; these sites must route through the underlying socket fd that `esp_tls` is sitting on top of, or they silently no-op (setsockopt) / hit undefined behaviour (`FD_SET(-1, ...)`). The select-peek at line 2187 is on the streaming MapResponse hot path — leaving it broken regresses TLS reconnects.
+
+This task lands a single helper and uses it everywhere a raw fd is needed.
+
+- [ ] **Step 1: Add the helper near `ml_conn_write`/`ml_conn_read`**
+
+```c
+static int ml_conn_sockfd(microlink_t *ml) {
+    if (ml->use_tls) {
+        int fd = -1;
+        if (ml->coord_tls && esp_tls_get_conn_sockfd(ml->coord_tls, &fd) == ESP_OK) {
+            return fd;
+        }
+        return -1;
+    }
+    return ml->coord_sock;
+}
+```
+
+- [ ] **Step 2: Replace each `ml_setsockopt(ml->coord_sock, ...)` with `ml_setsockopt(ml_conn_sockfd(ml), ...)`**
+
+Six call sites. `grep -n "ml_setsockopt(ml->coord_sock" microlink/components/microlink/src/ml_coord.c` lists them. Mechanical substitution; do not change the rest of each call.
+
+- [ ] **Step 3: Replace the `FD_SET` and `ml_select_fds` sites at lines 2187-2189**
+
+Current:
+
+```c
+FD_SET(ml->coord_sock, &readfds);
+ml_select_fds(ml->coord_sock + 1, &readfds, NULL, NULL, &tv);
+```
+
+Becomes:
+
+```c
+int peek_fd = ml_conn_sockfd(ml);
+if (peek_fd < 0) {
+    /* No usable fd (TLS context vanished). Treat as no-data. */
+    sel = 0;
+} else {
+    FD_SET(peek_fd, &readfds);
+    sel = ml_select_fds(peek_fd + 1, &readfds, NULL, NULL, &tv);
+}
+```
+
+(The exact variable `sel` matches the existing `int sel = ...` on line 2189 — keep its name.)
+
+- [ ] **Step 4: At the same select site, peek TLS-buffered bytes first**
+
+`mbedtls_ssl_read` may have decrypted bytes buffered internally even when the underlying socket reads zero. Before the `select`, ask `esp_tls`:
+
+```c
+if (ml->use_tls && ml->coord_tls) {
+    size_t avail = esp_tls_get_bytes_avail(ml->coord_tls);
+    if (avail > 0) {
+        sel = 1;   /* short-circuit: tell the rest of the function data is ready */
+        goto have_data;   /* or whatever the existing "data ready" path is */
+    }
+}
+```
+
+Where `have_data:` is whatever label / branch the existing `sel > 0` path falls into. If the surrounding code is structured as `if (sel > 0) { ... }`, the simpler form is to set `sel = 1` before the select branch and skip the `FD_SET`/`select` entirely.
+
+- [ ] **Step 5: Compile-check**
+
+```bash
+ssh jonny@192.168.5.201 "docker exec esphome /usr/local/bin/esphome compile /config/esphome-web-18e080.yaml 2>&1 | tail -20"
+```
+
+Expected: clean compile.
+
+- [ ] **Step 6: Commit**
+
+```bash
+ssh jonny@192.168.5.201 "docker exec esphome bash -c 'cd /config/tailscale-local && git add microlink/components/microlink/src/ml_coord.c && git -c user.name=jonny190 -c user.email=jonny190@gmail.com commit -m \"feat(microlink): route setsockopt/select through TLS-aware sockfd helper\"'"
+```
+
+---
+
 ## Task 9: Add TLS branch to `do_tcp_connect`
 
 **Files:**
