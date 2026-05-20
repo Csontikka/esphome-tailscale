@@ -143,10 +143,146 @@ static int hex_to_bytes32(const char *hex, uint8_t out[32]) {
     return 0;
 }
 
+/* Parse the /key?v=88 HTTP response (already NUL-terminated, length resp_len).
+ * Skips HTTP headers, handles chunked transfer encoding, decodes the JSON
+ * "publicKey":"mkey:<64 hex>" field, and hex-decodes the 32-byte Noise pubkey
+ * into pubkey_out.  Returns 0 on success, -1 on parse/decode error. */
+static int parse_pubkey_response(const char *resp, int resp_len,
+                                 uint8_t pubkey_out[32]) {
+    (void)resp_len; /* NUL-terminated; len used only as guard already by caller */
+
+    /* Find header/body boundary */
+    const char *body = strstr(resp, "\r\n\r\n");
+    if (!body) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: no header terminator in response");
+        return -1;
+    }
+    body += 4;
+
+    /* Handle chunked transfer encoding: skip the first hex length line. */
+    if (strstr(resp, "Transfer-Encoding: chunked") ||
+        strstr(resp, "transfer-encoding: chunked") ||
+        strstr(resp, "TRANSFER-ENCODING: CHUNKED")) {
+        const char *chunk_end = strstr(body, "\r\n");
+        if (!chunk_end) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: chunked body malformed");
+            return -1;
+        }
+        body = chunk_end + 2;
+    }
+
+    /* Parse JSON: {"legacyPublicKey":"mkey:...","publicKey":"mkey:<64 hex>"} */
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: JSON parse failed; body='%s'", body);
+        return -1;
+    }
+    cJSON *pk = cJSON_GetObjectItem(root, "publicKey");
+    if (!cJSON_IsString(pk) || !pk->valuestring) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: no publicKey field in JSON");
+        cJSON_Delete(root);
+        return -1;
+    }
+    const char *s = pk->valuestring;
+    /* Strip "mkey:" prefix if present */
+    if (strncmp(s, "mkey:", 5) == 0) s += 5;
+    if (strlen(s) != 64) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: publicKey wrong length (%d, want 64)", (int)strlen(s));
+        cJSON_Delete(root);
+        return -1;
+    }
+    if (hex_to_bytes32(s, pubkey_out) != 0) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: hex decode failed");
+        cJSON_Delete(root);
+        return -1;
+    }
+    cJSON_Delete(root);
+    return 0;
+}
+
 /* Open a short-lived TCP connection to host:port, GET /key?v=88, parse JSON
  * body, extract publicKey, hex-decode into ml->ctrl_noise_pubkey.
  * Returns 0 on success, -1 on any failure. Closes its own socket. */
 static int fetch_server_pubkey(microlink_t *ml, const char *host, const char *port) {
+    /* ------------------------------------------------------------------ */
+    /* TLS branch: use esp_tls for a short-lived, transient connection.    */
+    /* The handle is local — never stored in ml.                           */
+    /* ------------------------------------------------------------------ */
+    if (ml->use_tls) {
+        ESP_LOGI(TAG, "Fetching Noise server pubkey from https://%s:%s/key?v=88", host, port);
+
+        const esp_tls_cfg_t cfg = {
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms        = 10000,
+            .non_block         = false,
+        };
+        esp_tls_t *tls = esp_tls_init();
+        if (!tls) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: esp_tls_init failed");
+            return -1;
+        }
+        int port_i = atoi(port);
+        int rc = esp_tls_conn_new_sync(host, (int)strlen(host), port_i, &cfg, tls);
+        if (rc != 1) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: TLS handshake failed (rc=%d)", rc);
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+
+        /* Build the HTTP GET request; use ctrl_host_hdr for the Host header
+         * (matches what the coord connection uses), falling back to host. */
+        const char *host_hdr = (ml->ctrl_host_hdr[0]) ? ml->ctrl_host_hdr : host;
+        char req[256];
+        int req_len = snprintf(req, sizeof(req),
+            "GET /key?v=88 HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "User-Agent: microlink\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            host_hdr);
+        if (req_len <= 0 || req_len >= (int)sizeof(req)) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: request snprintf overflow");
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+
+        if ((ssize_t)esp_tls_conn_write(tls, req, req_len) != (ssize_t)req_len) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: TLS write failed");
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+
+        /* Drain the full response (server closes after body). */
+        char resp[2048];
+        int total = 0;
+        while (total < (int)sizeof(resp) - 1) {
+            ssize_t n = esp_tls_conn_read(tls, resp + total,
+                                          sizeof(resp) - 1 - total);
+            if (n <= 0) break;
+            total += (int)n;
+        }
+        esp_tls_conn_destroy(tls);
+
+        if (total <= 0) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: empty TLS response");
+            return -1;
+        }
+        resp[total] = '\0';
+
+        if (parse_pubkey_response(resp, total, ml->ctrl_noise_pubkey) != 0) {
+            return -1;
+        }
+        ml->ctrl_noise_pubkey_valid = true;
+        ESP_LOGI(TAG, "Fetched Noise server pubkey (TLS): %02x%02x%02x%02x...%02x%02x",
+                 ml->ctrl_noise_pubkey[0], ml->ctrl_noise_pubkey[1],
+                 ml->ctrl_noise_pubkey[2], ml->ctrl_noise_pubkey[3],
+                 ml->ctrl_noise_pubkey[30], ml->ctrl_noise_pubkey[31]);
+        return 0;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Plain-HTTP branch (existing code, unchanged).                        */
+    /* ------------------------------------------------------------------ */
     int sock = -1;
     struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
     struct addrinfo *res = NULL;
@@ -203,52 +339,9 @@ static int fetch_server_pubkey(microlink_t *ml, const char *host, const char *po
     }
     resp[total] = '\0';
 
-    /* Find header/body boundary */
-    char *body = strstr(resp, "\r\n\r\n");
-    if (!body) {
-        ESP_LOGE(TAG, "fetch_server_pubkey: no header terminator in response");
+    if (parse_pubkey_response(resp, total, ml->ctrl_noise_pubkey) != 0) {
         goto out;
     }
-    body += 4;
-
-    /* Handle chunked transfer encoding: skip the first hex length line. */
-    if (strstr(resp, "Transfer-Encoding: chunked") ||
-        strstr(resp, "transfer-encoding: chunked") ||
-        strstr(resp, "TRANSFER-ENCODING: CHUNKED")) {
-        char *chunk_end = strstr(body, "\r\n");
-        if (!chunk_end) {
-            ESP_LOGE(TAG, "fetch_server_pubkey: chunked body malformed");
-            goto out;
-        }
-        body = chunk_end + 2;
-    }
-
-    /* Parse JSON: {"legacyPublicKey":"mkey:...","publicKey":"mkey:<64 hex>"} */
-    cJSON *root = cJSON_Parse(body);
-    if (!root) {
-        ESP_LOGE(TAG, "fetch_server_pubkey: JSON parse failed; body='%s'", body);
-        goto out;
-    }
-    cJSON *pk = cJSON_GetObjectItem(root, "publicKey");
-    if (!cJSON_IsString(pk) || !pk->valuestring) {
-        ESP_LOGE(TAG, "fetch_server_pubkey: no publicKey field in JSON");
-        cJSON_Delete(root);
-        goto out;
-    }
-    const char *s = pk->valuestring;
-    /* Strip "mkey:" prefix if present */
-    if (strncmp(s, "mkey:", 5) == 0) s += 5;
-    if (strlen(s) != 64) {
-        ESP_LOGE(TAG, "fetch_server_pubkey: publicKey wrong length (%d, want 64)", (int)strlen(s));
-        cJSON_Delete(root);
-        goto out;
-    }
-    if (hex_to_bytes32(s, ml->ctrl_noise_pubkey) != 0) {
-        ESP_LOGE(TAG, "fetch_server_pubkey: hex decode failed");
-        cJSON_Delete(root);
-        goto out;
-    }
-    cJSON_Delete(root);
     ml->ctrl_noise_pubkey_valid = true;
     ESP_LOGI(TAG, "Fetched Noise server pubkey: %02x%02x%02x%02x...%02x%02x",
              ml->ctrl_noise_pubkey[0], ml->ctrl_noise_pubkey[1],
