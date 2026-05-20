@@ -31,12 +31,8 @@
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "mbedtls/base64.h"
-/* Forward-declare esp_tls I/O functions to avoid pulling in esp_tls.h
- * (microlink_internal.h already forward-declares esp_tls_t). */
-ssize_t esp_tls_conn_write(esp_tls_t *tls, const void *data, size_t datalen);
-ssize_t esp_tls_conn_read(esp_tls_t *tls, void *data, size_t datalen);
-esp_err_t esp_tls_get_conn_sockfd(esp_tls_t *tls, int *sockfd);
-ssize_t   esp_tls_get_bytes_avail(esp_tls_t *tls);
+#include "esp_tls.h"
+#include "esp_crt_bundle.h"
 #include <string.h>
 #include <errno.h>
 
@@ -523,6 +519,41 @@ static int do_tcp_connect(microlink_t *ml) {
         snprintf(ml->ctrl_host_hdr, sizeof(ml->ctrl_host_hdr), "%s:%s",
                  ml->ctrl_host_parsed, ml->ctrl_port_str);
     }
+
+    /* ====== TLS BRANCH ====================================================
+     * When the login server URL used https://, skip raw TCP and do a full
+     * TLS handshake using the ESP-IDF bundled CA roots.  On success we
+     * store the handle in ml->coord_tls and set ml->coord_sock = -1 so
+     * all subsequent I/O goes through the ml_conn_* helpers.
+     * Task 11 handles cleanup of coord_tls in the disconnect path.
+     * =================================================================== */
+    if (ml->use_tls) {
+        const esp_tls_cfg_t cfg = {
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms        = 10000,
+            .non_block         = false,
+        };
+        esp_tls_t *tls = esp_tls_init();
+        if (tls == NULL) {
+            ESP_LOGE(TAG, "do_tcp_connect: esp_tls_init failed");
+            return -1;
+        }
+        int port_i = atoi(ml->ctrl_port_str);
+        int rc = esp_tls_conn_new_sync(ml->ctrl_host_parsed,
+                                       (int)strlen(ml->ctrl_host_parsed),
+                                       port_i, &cfg, tls);
+        if (rc != 1) {
+            ESP_LOGE(TAG, "do_tcp_connect: TLS handshake to %s:%d failed (rc=%d)",
+                     ml->ctrl_host_parsed, port_i, rc);
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+        ml->coord_tls  = tls;
+        ml->coord_sock = -1;
+        ESP_LOGI(TAG, "TLS connected to %s:%d", ml->ctrl_host_parsed, port_i);
+        return 0;
+    }
+    /* else: plain-TCP path below -- completely unchanged */
 
     ESP_LOGI(TAG, "Resolving %s (port %s)...", ml->ctrl_host_parsed, ml->ctrl_port_str);
 
