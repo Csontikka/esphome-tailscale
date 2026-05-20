@@ -35,6 +35,8 @@
  * (microlink_internal.h already forward-declares esp_tls_t). */
 ssize_t esp_tls_conn_write(esp_tls_t *tls, const void *data, size_t datalen);
 ssize_t esp_tls_conn_read(esp_tls_t *tls, void *data, size_t datalen);
+esp_err_t esp_tls_get_conn_sockfd(esp_tls_t *tls, int *sockfd);
+ssize_t   esp_tls_get_bytes_avail(esp_tls_t *tls);
 #include <string.h>
 #include <errno.h>
 
@@ -341,10 +343,26 @@ static int ml_conn_read(microlink_t *ml, uint8_t *buf, size_t len) {
  * TCP I/O helpers for coord socket (owned exclusively by this task)
  * ========================================================================== */
 
+/* Return the underlying socket fd suitable for setsockopt / FD_SET / select.
+ * When use_tls is set, this is the fd esp_tls is sitting on top of; otherwise
+ * it's ml->coord_sock directly. Returns -1 if no fd is currently available
+ * (e.g. TLS context torn down). Callers should null-check the result before
+ * using it in FD_SET. */
+static int ml_conn_sockfd(microlink_t *ml) {
+    if (ml->use_tls) {
+        int fd = -1;
+        if (ml->coord_tls && esp_tls_get_conn_sockfd(ml->coord_tls, &fd) == ESP_OK) {
+            return fd;
+        }
+        return -1;
+    }
+    return ml->coord_sock;
+}
+
 static int coord_send(microlink_t *ml, const uint8_t *data, size_t len) {
     /* Set send timeout to prevent indefinite blocking (v1 uses MSG_DONTWAIT) */
     struct timeval snd_tv = { .tv_sec = 5, .tv_usec = 0 };
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
 
     size_t sent = 0;
     while (sent < len) {
@@ -766,7 +784,7 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
          * arrive within a few hundred ms even on slow cellular links. */
         ESP_LOGI(TAG, "No extra data in initial buffer, reading proactive frames from socket...");
         struct timeval short_tv = { .tv_sec = 2, .tv_usec = 0 };
-        ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &short_tv, sizeof(short_tv));
+        ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &short_tv, sizeof(short_tv));
 
         extra_data = ml_psram_malloc(1024);
         if (extra_data) {
@@ -784,7 +802,7 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
 
         /* Restore normal recv timeout */
         struct timeval normal_tv = { .tv_sec = 60, .tv_usec = 0 };
-        ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &normal_tv, sizeof(normal_tv));
+        ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &normal_tv, sizeof(normal_tv));
     }
 
     if (extra_data && extra_len > 0) {
@@ -1736,7 +1754,7 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
 
     /* Set extended recv timeout for large MapResponse (60 seconds) */
     struct timeval rcv_tv = { .tv_sec = 60, .tv_usec = 0 };
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 
     uint64_t recv_start_ms = ml_get_time_ms();
     uint64_t last_progress_ms = recv_start_ms;
@@ -1843,7 +1861,7 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
 
     /* Restore normal recv timeout (5 seconds for long-poll delta reads) */
     rcv_tv.tv_sec = 5;
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 
     if (!got_chunk || expected_body_len == 0 || json_total < 4 + expected_body_len) {
         uint64_t elapsed = ml_get_time_ms() - recv_start_ms;
@@ -2225,14 +2243,39 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     /* Use select() to check if data is available before blocking in recv */
     fd_set readfds;
     FD_ZERO(&readfds);
-    FD_SET(ml->coord_sock, &readfds);
     struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };  /* 50ms */
-    int sel = ml_select_fds(ml->coord_sock + 1, &readfds, NULL, NULL, &tv);
+    int sel;
+    /* Peek TLS-buffered bytes first: mbedtls may already have decrypted bytes
+     * available even when the underlying socket has none, in which case select()
+     * would block waiting for more wire data while we have data ready to read. */
+    if (ml->use_tls && ml->coord_tls) {
+        size_t avail = esp_tls_get_bytes_avail(ml->coord_tls);
+        if (avail > 0) {
+            sel = 1;
+            FD_SET(ml_conn_sockfd(ml), &readfds);  /* still set for downstream consumers */
+        } else {
+            int peek_fd = ml_conn_sockfd(ml);
+            if (peek_fd < 0) {
+                sel = 0;
+            } else {
+                FD_SET(peek_fd, &readfds);
+                sel = ml_select_fds(peek_fd + 1, &readfds, NULL, NULL, &tv);
+            }
+        }
+    } else {
+        int peek_fd = ml_conn_sockfd(ml);
+        if (peek_fd < 0) {
+            sel = 0;
+        } else {
+            FD_SET(peek_fd, &readfds);
+            sel = ml_select_fds(peek_fd + 1, &readfds, NULL, NULL, &tv);
+        }
+    }
     if (sel <= 0) return 0;  /* No data available or error */
 
     /* Data available — set short recv timeout for partial frame safety */
     struct timeval tv_recv = { .tv_sec = 2, .tv_usec = 0 };
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &tv_recv, sizeof(tv_recv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &tv_recv, sizeof(tv_recv));
 
     uint8_t *frame_buf = ml_psram_malloc(65536);
     if (!frame_buf) return 0;
