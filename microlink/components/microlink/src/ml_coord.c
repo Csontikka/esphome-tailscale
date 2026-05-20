@@ -448,6 +448,21 @@ static int ml_conn_sockfd(microlink_t *ml) {
     return ml->coord_sock;
 }
 
+/* Tear down the coordinator connection.  Destroys the TLS handle if one is
+ * active, closes the raw socket otherwise.  Idempotent: safe to call when
+ * neither is currently held.  After this function returns, ml->coord_tls
+ * is NULL and ml->coord_sock is -1. */
+static void ml_conn_close(microlink_t *ml) {
+    if (ml->coord_tls) {
+        esp_tls_conn_destroy(ml->coord_tls);
+        ml->coord_tls = NULL;
+    }
+    if (ml->coord_sock >= 0) {
+        ml_close_sock(ml->coord_sock);
+        ml->coord_sock = -1;
+    }
+}
+
 static int coord_send(microlink_t *ml, const uint8_t *data, size_t len) {
     /* Set send timeout to prevent indefinite blocking (v1 uses MSG_DONTWAIT) */
     struct timeval snd_tv = { .tv_sec = 5, .tv_usec = 0 };
@@ -2592,10 +2607,7 @@ void ml_coord_task(void *arg) {
                 }
                 break;
             case ML_CMD_DISCONNECT:
-                if (ml->coord_sock >= 0) {
-                    ml_close_sock(ml->coord_sock);
-                    ml->coord_sock = -1;
-                }
+                ml_conn_close(ml);
                 state = COORD_IDLE;
                 ml->state = ML_STATE_IDLE;
                 break;
@@ -2659,8 +2671,7 @@ void ml_coord_task(void *arg) {
             ml->state = ML_STATE_REGISTERING;
             if (do_noise_handshake(ml, &noise) < 0) {
                 ESP_LOGE(TAG, "Noise handshake failed");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2674,8 +2685,7 @@ void ml_coord_task(void *arg) {
         case COORD_H2_PREFACE:
             if (do_h2_preface(ml, &noise) < 0) {
                 ESP_LOGE(TAG, "H2 preface failed");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2686,8 +2696,7 @@ void ml_coord_task(void *arg) {
             ESP_LOGI(TAG, "Registering...");
             if (do_register(ml, &noise) < 0) {
                 ESP_LOGE(TAG, "Registration failed");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2702,8 +2711,7 @@ void ml_coord_task(void *arg) {
              * poll_map_update() in the COORD_LONG_POLL state below. */
             if (do_fetch_peers(ml, &noise) < 0) {
                 ESP_LOGW(TAG, "MapRequest failed, will retry");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2996,10 +3004,7 @@ void ml_coord_task(void *arg) {
                 reconnect_attempts++;
 
                 /* Close old connection */
-                if (ml->coord_sock >= 0) {
-                    ml_close_sock(ml->coord_sock);
-                    ml->coord_sock = -1;
-                }
+                ml_conn_close(ml);
 
                 /* Reset Noise state for fresh handshake */
                 memset(&noise, 0, sizeof(noise));
@@ -3011,10 +3016,7 @@ void ml_coord_task(void *arg) {
     }
 
     /* Cleanup */
-    if (ml->coord_sock >= 0) {
-        ml_close_sock(ml->coord_sock);
-        ml->coord_sock = -1;
-    }
+    ml_conn_close(ml);
     memset(&noise, 0, sizeof(noise));
 
     ESP_LOGI(TAG, "Coord task exiting");
