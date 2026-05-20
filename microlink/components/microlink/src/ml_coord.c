@@ -636,7 +636,7 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
     uint8_t *resp = ml_psram_malloc(2048);
     if (!resp) return -1;
 
-    int total = ml_recv(ml->coord_sock, resp, 2047, 0);
+    int total = ml_conn_read(ml, resp, 2047);
     if (total <= 0) {
         ESP_LOGE(TAG, "Handshake recv failed: %d (errno=%d)", total, errno);
         free(resp);
@@ -770,7 +770,7 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
 
         extra_data = ml_psram_malloc(1024);
         if (extra_data) {
-            int n = ml_recv(ml->coord_sock, extra_data, 1024, 0);
+            int n = ml_conn_read(ml, extra_data, 1024);
             if (n > 0) {
                 extra_len = n;
                 ESP_LOGI(TAG, "Read %d bytes of proactive frames from socket", extra_len);
