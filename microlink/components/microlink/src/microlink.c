@@ -190,6 +190,8 @@ microlink_t *microlink_init(const microlink_config_t *config) {
 
     ml->state = ML_STATE_IDLE;
     ml->coord_sock = -1;
+    ml->use_tls    = false;
+    ml->coord_tls  = NULL;
     ml->disco_sock4 = -1;
     ml->disco_sock6 = -1;
     ml->stun_sock = -1;
