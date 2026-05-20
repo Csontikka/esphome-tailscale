@@ -348,7 +348,7 @@ static int coord_send(microlink_t *ml, const uint8_t *data, size_t len) {
 
     size_t sent = 0;
     while (sent < len) {
-        int n = ml_send(ml->coord_sock, data + sent, len - sent, 0);
+        int n = ml_conn_write(ml, data + sent, len - sent);
         if (n <= 0) {
             ESP_LOGE(TAG, "coord_send failed: sent=%d/%d n=%d errno=%d",
                      (int)sent, (int)len, n, errno);
@@ -363,7 +363,7 @@ static int coord_recv(microlink_t *ml, uint8_t *buf, size_t len) {
     size_t recvd = 0;
     int retries = 0;
     while (recvd < len) {
-        int n = ml_recv(ml->coord_sock, buf + recvd, len - recvd, 0);
+        int n = ml_conn_read(ml, buf + recvd, len - recvd);
         if (n <= 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if (recvd == 0) {
