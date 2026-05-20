@@ -11,10 +11,10 @@ logger:
 external_components:
   - source:
       type: git
-      url: https://github.com/Csontikka/esphome-tailscale.git
-      ref: main
+      url: https://github.com/jonny190/esphome-tailscale.git
+      ref: tls-login-server
     components: [tailscale]
-    refresh: 0s
+    refresh: 1d
 
 time:
   - platform: sntp
