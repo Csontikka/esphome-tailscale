@@ -31,6 +31,10 @@
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "mbedtls/base64.h"
+/* Forward-declare esp_tls I/O functions to avoid pulling in esp_tls.h
+ * (microlink_internal.h already forward-declares esp_tls_t). */
+ssize_t esp_tls_conn_write(esp_tls_t *tls, const void *data, size_t datalen);
+ssize_t esp_tls_conn_read(esp_tls_t *tls, void *data, size_t datalen);
 #include <string.h>
 #include <errno.h>
 
@@ -300,6 +304,37 @@ static int hex_to_bytes(const char *hex, uint8_t *bytes, size_t max_len) {
         bytes[i] = (uint8_t)val;
     }
     return hex_len / 2;
+}
+
+/* TLS-aware send: dispatches to esp_tls when ml->use_tls is set, else to
+ * the raw socket via ml_send. Returns bytes written on success, -1 on
+ * error. Mirrors ml_send's contract so callers don't need to know. */
+static int ml_conn_write(microlink_t *ml, const uint8_t *buf, size_t len) {
+    if (ml->use_tls) {
+        ssize_t n = esp_tls_conn_write(ml->coord_tls, buf, len);
+        if (n < 0) {
+            ESP_LOGE(TAG, "ml_conn_write: esp_tls_conn_write failed: %d", (int)n);
+            return -1;
+        }
+        return (int)n;
+    }
+    return ml_send(ml->coord_sock, buf, len, 0);
+}
+
+/* TLS-aware recv: mirror of ml_conn_write. Returns bytes read, 0 on
+ * orderly close, -1 on error / WANT_READ-style non-blocking returns. */
+static int ml_conn_read(microlink_t *ml, uint8_t *buf, size_t len) {
+    if (ml->use_tls) {
+        ssize_t n = esp_tls_conn_read(ml->coord_tls, buf, len);
+        if (n < 0) {
+            /* esp_tls returns negative for WANT_READ/WANT_WRITE in
+             * non-blocking mode and for hard errors alike. Existing
+             * callers already treat <= 0 the same as ml_recv's path. */
+            return -1;
+        }
+        return (int)n;
+    }
+    return ml_recv(ml->coord_sock, buf, len, 0);
 }
 
 /* ============================================================================

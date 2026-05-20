@@ -24,6 +24,7 @@ set(REQUIRES
     lwip
     mbedtls
     json
+    esp_tls
 )
 
 idf_component_register(
