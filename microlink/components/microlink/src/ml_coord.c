@@ -56,21 +56,26 @@ static const char *TAG = "ml_coord";
  */
 
 /* Parse "[http://]host[:port]" into bare host and decimal port string.
- * Default port is "80".  https:// is rejected (TLS is out of scope).
+ * Default port is "80" for http:// and "443" for https://.
+ * If use_tls_out is non-NULL it is set to true when the scheme is https://.
  * Returns 0 on success, -1 on error. */
 static int parse_host_port(const char *in,
                            char *host_out, size_t host_sz,
-                           char *port_out, size_t port_sz) {
+                           char *port_out, size_t port_sz,
+                           bool *use_tls_out) {
     if (!in || !host_out || !port_out || host_sz == 0 || port_sz == 0) return -1;
 
     const char *p = in;
+    const char *default_port = "80";
 
     /* Strip scheme */
     if (strncasecmp(p, "http://", 7) == 0) {
         p += 7;
     } else if (strncasecmp(p, "https://", 8) == 0) {
-        ESP_LOGE(TAG, "https:// control plane URL is not supported (TLS unimplemented): %s", in);
-        return -1;
+        if (use_tls_out) *use_tls_out = true;
+        p += 8;
+        /* Default port for https is 443; explicit ":port" in the URL overrides. */
+        default_port = "443";
     }
 
     /* Find ':' for port separator, stop at '/' (path) or end */
@@ -111,7 +116,7 @@ static int parse_host_port(const char *in,
             }
         }
     } else {
-        strncpy(port_out, "80", port_sz - 1);
+        strncpy(port_out, default_port, port_sz - 1);
         port_out[port_sz - 1] = '\0';
     }
     return 0;
@@ -444,7 +449,8 @@ static int do_tcp_connect(microlink_t *ml) {
     if (ml->ctrl_host[0]) {
         if (parse_host_port(ml->ctrl_host,
                             ml->ctrl_host_parsed, sizeof(ml->ctrl_host_parsed),
-                            ml->ctrl_port_str, sizeof(ml->ctrl_port_str)) != 0) {
+                            ml->ctrl_port_str, sizeof(ml->ctrl_port_str),
+                            &ml->use_tls) != 0) {
             ESP_LOGE(TAG, "Invalid login_server '%s'", ml->ctrl_host);
             return -1;
         }
