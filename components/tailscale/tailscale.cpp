@@ -1,7 +1,7 @@
 #include "tailscale.h"
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
-#include "esphome/components/wifi/wifi_component.h"
+#include "esphome/components/network/util.h"
 #ifdef USE_API
 #include "esphome/components/api/api_server.h"
 #endif
@@ -104,7 +104,7 @@ void TailscaleComponent::setup() {
   }
 #endif
 
-  ESP_LOGI(TAG, "Waiting for WiFi before starting...");
+  ESP_LOGI(TAG, "Waiting for network before starting...");
 }
 
 void TailscaleComponent::start_microlink_() {
@@ -168,19 +168,19 @@ void TailscaleComponent::start_microlink_() {
 
   this->microlink_start_ms_ = millis();
   this->registration_failed_logged_ = false;
-  ESP_LOGI(TAG, "Tailscale started after WiFi connected!");
+  ESP_LOGI(TAG, "Tailscale started after network connected!");
 }
 
 void TailscaleComponent::loop() {
-  // Start microlink only after WiFi is connected (and user hasn't disabled)
-  if (this->ml_ == nullptr && wifi::global_wifi_component->is_connected()) {
+  // Start microlink only after network is connected (and user hasn't disabled)
+  if (this->ml_ == nullptr && network::is_connected()) {
     if (this->tailscale_user_enabled_ && !this->vpn_stopping_) {
       this->start_microlink_();
     }
   }
 
-  // Publish static sensor values once after microlink starts (or WiFi connects)
-  if (!this->initial_publish_done_ && wifi::global_wifi_component->is_connected()) {
+  // Publish static sensor values once after microlink starts (or network connects)
+  if (!this->initial_publish_done_ && network::is_connected()) {
     this->initial_publish_done_ = true;
     this->state_changed_ = true;
   }
@@ -270,7 +270,7 @@ void TailscaleComponent::loop() {
     if (now_ms - this->last_hint_ms_ >= HINT_INTERVAL_MS) {
       this->last_hint_ms_ = now_ms;
       if (!this->vpn_ip_str_.empty()) {
-        ESP_LOGI(TAG, "Hint: if ESPHome is offline in Builder, set 'wifi: use_address: \"%s\"' in your YAML",
+        ESP_LOGI(TAG, "Hint: if ESPHome is offline in Builder, set use_address: \"%s\" in your wifi/ethernet YAML",
                  this->vpn_ip_str_.c_str());
       }
       // Peer capacity warnings
@@ -527,7 +527,7 @@ void TailscaleComponent::publish_state_() {
     if (vpn_ip.empty()) {
       hint = "Waiting for VPN...";
     } else {
-      hint = "If ESPHome is offline in Builder, set wifi use_address: \"" + vpn_ip + "\" — https://github.com/Csontikka/esphome-tailscale#wifi-use-address";
+      hint = "If ESPHome is offline in Builder, set use_address: \"" + vpn_ip + "\" in wifi/ethernet — https://github.com/Csontikka/esphome-tailscale#wifi-use-address";
     }
     if (this->setup_status_sensor_->state != hint) {
       this->setup_status_sensor_->publish_state(hint);
@@ -960,7 +960,7 @@ std::string TailscaleComponent::detect_ha_route_(std::string *out_ip) {
 void TailscaleComponent::check_ip_config_(const char *vpn_ip) {
   this->vpn_ip_str_ = vpn_ip;
   this->ip_notify_pending_ = true;
-  ESP_LOGI(TAG, "Set wifi use_address: \"%s\" in your ESPHome YAML", vpn_ip);
+  ESP_LOGI(TAG, "Set use_address: \"%s\" in your wifi/ethernet ESPHome YAML", vpn_ip);
 }
 
 void TailscaleComponent::send_ip_notification_() {
