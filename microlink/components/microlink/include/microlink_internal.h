@@ -27,6 +27,10 @@
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 #include "esp_heap_caps.h"
+/* Forward-declare esp_tls_t so we can hold a pointer without pulling in
+ * the full esp_tls.h header (esp_tls REQUIRES added in CMakeLists Task 12). */
+struct esp_tls;
+typedef struct esp_tls esp_tls_t;
 
 #ifdef CONFIG_ML_ZERO_COPY_WG
 #include "lwip/udp.h"
@@ -388,6 +392,8 @@ struct microlink_s {
 
     /* Coordination socket (owned exclusively by coord task) */
     int coord_sock;
+    bool       use_tls;          /* true if login_server URL is https:// */
+    esp_tls_t *coord_tls;        /* NULL when use_tls is false */
     uint32_t h2_next_stream_id;         /* Next H2 stream ID for endpoint updates (odd, starts at 7) */
 
     /* WireGuard netif (owned exclusively by wg_mgr task) */
