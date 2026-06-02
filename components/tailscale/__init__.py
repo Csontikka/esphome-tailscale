@@ -9,8 +9,24 @@ from esphome.components.esp32 import add_idf_sdkconfig_option
 from esphome.components import binary_sensor, text_sensor, sensor
 
 CODEOWNERS = ["@esphome-tailscale"]
-DEPENDENCIES = ["wifi", "esp32"]
+DEPENDENCIES = ["esp32"]
 AUTO_LOAD = ["binary_sensor", "text_sensor", "sensor", "button", "switch", "text"]
+
+
+def _validate_network(config):
+    """Validate that either wifi or ethernet is configured."""
+    import esphome.core as core
+
+    full = core.CORE.raw_config
+    if "wifi" not in full and "ethernet" not in full:
+        raise cv.Invalid(
+            "The tailscale component requires either 'wifi:' or 'ethernet:' "
+            "to be configured. Add one of them to your YAML."
+        )
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = _validate_network
 
 CONF_AUTH_KEY = "auth_key"
 CONF_HOSTNAME = "hostname"
