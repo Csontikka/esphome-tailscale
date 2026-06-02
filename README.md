@@ -72,6 +72,7 @@ Boards currently verified:
 
 - **ESPHome 2026.3.1** or newer
 - **ESP-IDF framework** (not Arduino) — this is enforced automatically by the package
+- **Network connectivity — WiFi *or* Ethernet.** The component needs a network, not WiFi specifically; a `wifi:` or an `ethernet:` block (e.g. W5500 / LAN8720 boards such as the Waveshare ESP32-S3-ETH) both work. A config with neither is rejected at validation.
 - **Home Assistant** with the ESPHome integration enabled
 - A **Tailscale account** (or a self-hosted [Headscale](https://github.com/juanfont/headscale) instance)
 
@@ -256,6 +257,8 @@ wifi:
   password: !secret wifi_password
   use_address: "100.xx.yy.zz"   # ← your Tailscale IP
 ```
+
+> On an **Ethernet** board, put `use_address` under your `ethernet:` block instead of `wifi:` — the meaning is identical.
 
 Re-flash once more (still USB if the device is in front of you; from here on OTA will work).
 

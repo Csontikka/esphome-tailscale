@@ -49,6 +49,23 @@ wifi:
   password: !secret wifi_password
   # use_address: "100.x.x.x"  # Set to your Tailscale VPN IP after first boot
 
+# --- Ethernet instead of WiFi? ---
+# The tailscale component works over Ethernet too — it only needs *some*
+# network, not WiFi specifically. On a wired board (e.g. Waveshare
+# ESP32-S3-ETH, or any LAN8720 / W5500 design), DELETE the `wifi:` block
+# above and use an `ethernet:` block instead. Pin `use_address` here, not
+# under wifi. Adjust pins to match your board.
+#
+# ethernet:
+#   type: W5500            # or LAN8720, etc.
+#   clk_pin: GPIO13
+#   mosi_pin: GPIO11
+#   miso_pin: GPIO12
+#   cs_pin: GPIO14
+#   interrupt_pin: GPIO10
+#   reset_pin: GPIO9
+#   # use_address: "100.x.x.x"  # Set to your Tailscale VPN IP after first boot
+
 logger:
   level: DEBUG
   hardware_uart: UART0
