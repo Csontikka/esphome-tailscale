@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-06-02
+
 ### Added
 - **Ethernet support.** The `tailscale:` component no longer hard-requires `wifi:` — it now depends on the generic ESPHome `network` layer, so it works on Ethernet-equipped ESP32 boards (e.g. Waveshare ESP32-S3-ETH / W5500). A `wifi:` **or** an `ethernet:` block is still required; a config with neither is rejected at validation with a clear message. Contributed by @DylanSallee ([#22](https://github.com/Csontikka/esphome-tailscale/pull/22), closes [#21](https://github.com/Csontikka/esphome-tailscale/issues/21)).
 
