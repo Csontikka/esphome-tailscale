@@ -8,7 +8,6 @@
 #include <cinttypes>
 #include <atomic>
 
-#include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
@@ -30,6 +29,10 @@
 #include "esp_core_dump.h"
 #endif
 
+/* Include last: ESPHome's ESP_LOGx macros must win over the IDF ones the headers
+ * above pull in, so telemetry status is visible in the normal ESPHome log. */
+#include "esphome/core/log.h"
+
 namespace esphome {
 namespace tailscale {
 
@@ -48,7 +51,7 @@ static const uint32_t TLM_RETRY_BACKOFF_S[] = {30, 60, 120, 300, 600};
 
 static std::atomic<bool> s_connected{false};
 static TaskHandle_t      s_task = nullptr;
-static char              s_device_hash[17] = "";   /* 16 hex + NUL */
+static char              s_device_hash[19] = "";   /* 16 hex id + 2 hex check + NUL */
 static uint32_t          s_boot_count = 0;
 static char              s_chip_buf[16] = "";
 static char              s_crash_sig[200] = "";     /* "" when no pending crash */
@@ -66,6 +69,19 @@ static void compute_device_hash() {
   mbedtls_sha256(input, sizeof(input), digest, 0);
   for (int i = 0; i < 8; i++) snprintf(s_device_hash + i * 2, 3, "%02x", digest[i]);
   s_device_hash[16] = 0;
+
+  /* Append a 2-hex integrity check = SHA-256(salt + the 16-hex id)[0]. The
+   * collector recomputes it from the id alone (it has no MAC) and drops payloads
+   * whose check doesn't match — cheap friction against random/garbage posts, not
+   * authentication (the firmware is open source). The 16-hex id is unchanged, so
+   * older firmware that sends only 16 chars still validates as legacy. */
+  uint8_t cin[sizeof(salt) - 1 + 16];
+  memcpy(cin, salt, sizeof(salt) - 1);
+  memcpy(cin + sizeof(salt) - 1, s_device_hash, 16);
+  uint8_t cdig[32];
+  mbedtls_sha256(cin, sizeof(cin), cdig, 0);
+  snprintf(s_device_hash + 16, 3, "%02x", cdig[0]);
+  s_device_hash[18] = 0;
 }
 
 static const char *chip_model_str() {

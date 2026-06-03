@@ -36,16 +36,45 @@ const ALLOWED_EVENT_TYPES = new Set(['boot', 'heartbeat']);
 const MAX_BODY_BYTES = 1024;
 const DISPLAY_TZ = 'Europe/Budapest';
 
+/* Legacy bare 16-hex device_hash (firmware <= v0.4.1, no integrity check) is
+ * accepted only through 2026-08-31 UTC — a grace window for existing installs to
+ * update. From 2026-09-01 only the 18-hex id+check is valid. */
+const LEGACY_DH_CUTOFF_MS = Date.UTC(2026, 8, 1); // 2026-09-01T00:00:00Z
+
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 }
 const isHex = (s, n) => typeof s === 'string' && s.length === n && /^[0-9a-f]+$/i.test(s);
 const asInt = (x) => (Number.isInteger(x) ? x : null);
 const asStr = (x, max) => (typeof x === 'string' ? x.slice(0, max) : null);
 const asBit = (x) => (x === 1 || x === 0 ? x : (x ? 1 : 0));
+
+/* 2-hex integrity check appended to device_hash: SHA-256(salt + id16)[0],
+ * recomputable from the 16-hex id alone (the collector has no MAC), so random/
+ * garbage posts can be dropped. Friction, not auth — the firmware + this salt
+ * are open source. Must match compute_device_hash() in telemetry.cpp. */
+async function dhCheck(id16) {
+  const data = new TextEncoder().encode('esphome-tailscale-v1' + id16);
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return d[0].toString(16).padStart(2, '0');
+}
+
+/* HTTP Basic gate for admin endpoints (any username; password == env.ADMIN_PASS).
+ * Returns a 401/503 Response when unauthorized, or null when OK. */
+function checkAdmin(request, env) {
+  const realm = { 'WWW-Authenticate': 'Basic realm="esphome-tailscale telemetry"' };
+  const auth = request.headers.get('Authorization');
+  if (!auth || !auth.startsWith('Basic ')) return new Response('Authentication required', { status: 401, headers: realm });
+  if (!env.ADMIN_PASS) return new Response('Admin disabled: set ADMIN_PASS secret.', { status: 503 });
+  let pass = '';
+  try { const d = atob(auth.slice(6)); pass = d.slice(d.indexOf(':') + 1); }
+  catch (e) { return new Response('Invalid auth header', { status: 400 }); }
+  if (pass !== env.ADMIN_PASS) return new Response('Forbidden', { status: 401, headers: realm });
+  return null;
+}
 
 /* Idempotent schema bootstrap — runs on every ingest/admin hit (cheap; D1
  * caches the prepared statements). No separate migration step needed. */
@@ -59,12 +88,18 @@ async function ensureSchema(env) {
          uptime_sec INTEGER, boot_count INTEGER, reset_reason INTEGER,
          psram INTEGER, connected INTEGER, crash_sig TEXT)`),
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)`),
+    env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_events_dh ON events(device_hash)`),
     env.DB.prepare(
       `CREATE TABLE IF NOT EXISTS devices (
          device_hash TEXT PRIMARY KEY,
          first_seen INTEGER, last_seen INTEGER,
          last_version TEXT, last_country TEXT, last_region TEXT,
          last_chip TEXT, last_psram INTEGER, total_events INTEGER)`),
+    env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS device_versions (
+         device_hash TEXT, version TEXT,
+         first_seen INTEGER, last_seen INTEGER, count INTEGER,
+         PRIMARY KEY (device_hash, version))`),
   ]);
 }
 
@@ -89,10 +124,25 @@ export default {
       let body;
       try { body = await request.json(); } catch (e) { return json({ error: 'invalid json' }, 400); }
 
-      if (!isHex(body.dh, 16)) return json({ error: 'invalid device_hash' }, 400);
+      /* Accept either an 18-char id+check (current firmware) or a bare 16-char id
+       * (legacy v0.4.0 builds with no check). For 18 chars, verify the trailing
+       * 2-hex check and reject a mismatch; either way we store only the 16-hex id. */
+      let dh;
+      if (isHex(body.dh, 18)) {
+        const id = body.dh.slice(0, 16).toLowerCase();
+        if (body.dh.slice(16, 18).toLowerCase() !== await dhCheck(id)) {
+          return json({ error: 'failed integrity check' }, 400);
+        }
+        dh = id;
+      } else if (isHex(body.dh, 16)) {
+        if (Date.now() >= LEGACY_DH_CUTOFF_MS) {
+          return json({ error: 'legacy device_hash retired — update firmware to >= 0.4.2' }, 400);
+        }
+        dh = body.dh.toLowerCase();
+      } else {
+        return json({ error: 'invalid device_hash' }, 400);
+      }
       if (!ALLOWED_EVENT_TYPES.has(body.et)) return json({ error: 'invalid event_type' }, 400);
-
-      const dh = body.dh.toLowerCase();
       const v  = asStr(body.v, 64);
       const et = body.et;
       const ch = asStr(body.ch, 16);
@@ -130,6 +180,29 @@ export default {
              last_psram    = COALESCE(excluded.last_psram, devices.last_psram),
              total_events  = devices.total_events + 1`)
           .bind(dh, v, country, region, ch, ps).run();
+
+        /* Per-device version lifecycle: one row per (device, version) with the
+         * window it ran. Never pruned (a device runs only a handful of versions),
+         * so the upgrade timeline survives even as old `events` rows age out. */
+        if (v) {
+          await env.DB.prepare(
+            `INSERT INTO device_versions (device_hash, version, first_seen, last_seen, count)
+             VALUES (?1, ?2, strftime('%s','now'), strftime('%s','now'), 1)
+             ON CONFLICT(device_hash, version) DO UPDATE SET
+               last_seen = strftime('%s','now'),
+               count     = count + 1`)
+            .bind(dh, v).run();
+        }
+
+        /* Bound per-device storage: keep only the most recent rows per device.
+         * Events are NEVER rejected (a crash-looping device's boot reports always
+         * land — that's exactly the signal we want); old rows just age out, so one
+         * device (crash loop or a single spam source) can't grow the DB unbounded.
+         * Abuse gate stays the TLM_KEY + Cloudflare's edge protection. */
+        await env.DB.prepare(
+          `DELETE FROM events WHERE device_hash = ?1 AND id NOT IN
+             (SELECT id FROM events WHERE device_hash = ?1 ORDER BY id DESC LIMIT 200)`)
+          .bind(dh).run();
       } catch (e) {
         return json({ error: 'db error', detail: e.message }, 500);
       }
@@ -138,21 +211,8 @@ export default {
 
     /* ---- admin dashboard ---- */
     if (url.pathname === '/admin' || url.pathname === '/admin/') {
-      const auth = request.headers.get('Authorization');
-      if (!auth || !auth.startsWith('Basic ')) {
-        return new Response('Authentication required', {
-          status: 401, headers: { 'WWW-Authenticate': 'Basic realm="esphome-tailscale telemetry"' } });
-      }
-      if (!env.ADMIN_PASS) {
-        return new Response('Admin disabled: set ADMIN_PASS secret.', { status: 503 });
-      }
-      let pass = '';
-      try { const d = atob(auth.slice(6)); pass = d.slice(d.indexOf(':') + 1); }
-      catch (e) { return new Response('Invalid auth header', { status: 400 }); }
-      if (pass !== env.ADMIN_PASS) {
-        return new Response('Forbidden', {
-          status: 401, headers: { 'WWW-Authenticate': 'Basic realm="esphome-tailscale telemetry"' } });
-      }
+      const unauth = checkAdmin(request, env);
+      if (unauth) return unauth;
 
       try {
         await ensureSchema(env);
@@ -332,6 +392,8 @@ thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:
 
     /* ---- aggregate JSON ---- */
     if (request.method === 'GET' && url.pathname === '/v1/stats') {
+      const unauth = checkAdmin(request, env);
+      if (unauth) return unauth;
       try {
         await ensureSchema(env);
         const dev = await env.DB.prepare('SELECT COUNT(*) AS n FROM devices').first();

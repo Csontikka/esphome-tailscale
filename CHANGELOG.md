@@ -10,6 +10,16 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Changed
+- **Telemetry device id now carries a 2-character integrity check.** The on-the-wire id is 18 hex chars: the same one-way 16-hex anonymous id plus a 2-hex check (`SHA-256(salt + id)[0]`). The receiving Worker recomputes the check from the id and drops random/garbage posts — cheap anti-abuse friction, not authentication. **Backward compatible:** firmware ≤ 0.4.1 (bare 16-hex id, no check) is still accepted through **2026-08-31 UTC**; from 2026-09-01 only the 18-hex form is accepted, so update before then. The stored anonymous id is unchanged (still the 16-hex hash) — no new data is collected (`components/tailscale/telemetry.{h,cpp}`, `telemetry/worker.js`).
+- **Telemetry status now logs through the standard ESPHome logger** instead of raw ESP-IDF logging (which was invisible at default log levels) — init and send results now show under the `tailscale.telemetry` tag.
+
+### Backend (telemetry Worker — no device firmware change required)
+- Replaced the per-source-IP rate limit with an **accept-always policy plus a per-device storage cap** (the most recent ~200 events per device are kept; older rows age out). A crash-looping device's boot reports — exactly the signal worth seeing — are never dropped, while no single device can grow the database unbounded.
+- Added a **`device_versions` rollup** (one row per device+version with first/last-seen and a count, never pruned) so each device's version-upgrade timeline survives the per-device events cap.
+- **`/v1/stats` is now behind the same HTTP Basic admin auth as `/admin`** (it was previously publicly readable).
+- Worker responses now send `cache-control: no-store` so the Cloudflare edge no longer serves stale cached telemetry responses.
+
 ## [0.4.1] — 2026-06-03
 
 ### Changed
@@ -21,6 +31,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 - **Anonymous telemetry (on by default; one YAML line to opt out).** On boot, then roughly once a day, the component POSTs a small anonymous JSON event to a Cloudflare Worker over HTTPS. The entire payload: an anonymous device id (`SHA-256(WiFi MAC + salt)[0..7]`, one-way), component version, event type, chip model, uptime, boot count, reset reason, PSRAM-present flag, and tailnet-connected flag — never the MAC, SSID, IP, tailnet name, peers, or auth key. The device sends no IP; the Worker stores only coarse geo (country/region from the Cloudflare edge), never the IP. Turn it off with `disable_telemetry: true`. Implementation: `components/tailscale/telemetry.{h,cpp}`; backend: `telemetry/worker.js`. See the [Telemetry](README.md#telemetry) section.
 
 ## [0.3.0] — 2026-06-03
+
+### Breaking
+- **PSRAM is now a hard requirement.** Boards without PSRAM never actually worked — the HTTP/2 + JSON control-plane buffers are a fixed 512 KB each and cannot be allocated from internal RAM, so a no-PSRAM board never fetches the tailnet map and never connects ([#9](https://github.com/Csontikka/esphome-tailscale/issues/9)) — but earlier docs wrongly implied a small-buffer no-PSRAM fallback. If your board has no PSRAM it will not connect; the boot log now says so explicitly (`ESP_LOGE`). The large microlink update in this release also changes memory/timing behaviour, so **re-verify after updating** and pin `packages:` to a tag rather than `ref: main` if you need stability.
 
 ### Changed
 - **Updated the vendored microlink library to the consolidated dev line (`058b374`).** Large upstream jump that brings the DERP / WireGuard work which previously lived only on feature branches:
