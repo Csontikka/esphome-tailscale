@@ -13,10 +13,6 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 ### Added
 - **Material Design icons on every default-package entity.** Each entity in `packages/tailscale/tailscale.yaml` now ships a sensible `icon:` (e.g. `mdi:shield-check` for VPN Connected, `mdi:account-network` for Peers Online, `mdi:calendar-clock` for Node Key Expiry), so the Tailscale entities show meaningful glyphs in Home Assistant out of the box. Inspired by [@sorrypqa](https://github.com/sorrypqa)'s fork. Not a breaking change — the entity `name`/`id`/`unique_id` are unchanged, and you can still override any icon in HA per entity.
 
-### Changed
-- **Telemetry admin dashboard:** the "Events by type" panel is now "Events by type + reset" — events are broken down by event type **and** reset reason (color-coded), matching the sibling project's view (`telemetry/worker.js`). Backend/admin only — no device firmware change.
-- **Telemetry admin dashboard:** the "Total events" card and the `/v1/stats` `events_total` field now sum the per-device lifetime counters (`SUM(devices.total_events)`) instead of counting rows in the capped `events` table, so the figure is a true lifetime total that never drops when old per-device rows age out. Backend/admin only.
-
 ## [0.4.2] — 2026-06-03
 
 ### Changed
