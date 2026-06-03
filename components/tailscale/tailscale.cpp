@@ -64,7 +64,7 @@ void TailscaleComponent::setup() {
     ESP_LOGI(TAG, "PSRAM detected: %u KB - using large buffers", (unsigned)(psram_size / 1024));
   } else {
     this->psram_available_ = false;
-    ESP_LOGW(TAG, "No PSRAM detected — using small buffers (max ~30 peers).");
+    ESP_LOGE(TAG, "No PSRAM detected — Tailscale requires PSRAM and will NOT connect on this board.");
     ESP_LOGW(TAG, "If your board has PSRAM but it's not initialized, add an explicit psram block to your YAML:");
     ESP_LOGW(TAG, "    psram:");
     ESP_LOGW(TAG, "      mode: octal");

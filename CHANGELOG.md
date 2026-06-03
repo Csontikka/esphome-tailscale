@@ -10,6 +10,12 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Documentation
+- **PSRAM is now documented as required, not "recommended".** The previous docs claimed the component falls back to small buffers and works without PSRAM (~30 peers) — that small-buffer mode was never actually implemented: the HTTP/2 + JSON control-plane buffers are a fixed 512 KB each and cannot be allocated from internal RAM, so a no-PSRAM board fails to fetch the tailnet map and never connects (this is [#9](https://github.com/Csontikka/esphome-tailscale/issues/9)). README and the `Device Memory` "Internal RAM" description updated to state PSRAM is a hard requirement.
+
+### Changed
+- The "No PSRAM detected" boot log is now an honest `ESP_LOGE` stating the device will not connect without PSRAM (was a misleading "using small buffers (max ~30 peers)" warning).
+
 ## [0.2.2] — 2026-06-02
 
 ### Added

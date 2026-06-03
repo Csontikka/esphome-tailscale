@@ -44,7 +44,7 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 - **HA API Connection Route sensor** — tells you *how* HA is currently reaching the device: `Tailscale Direct`, `Tailscale DERP`, or `Local`. Great for debugging connectivity.
 - **Node key expiry sensor + warning** — surfaces the node key expiry timestamp from the Tailscale control plane plus a `problem` binary sensor that turns off the moment you click "Disable key expiry".
 - **Runtime auth key override** — change the Tailscale auth key from HA without reflashing. Persisted in NVS across reboots.
-- **PSRAM-aware** — auto-detects PSRAM and scales internal buffers (supports large tailnets with 50+ peers).
+- **PSRAM-backed** — the control-plane and WireGuard buffers live in PSRAM (**PSRAM is required**; supports large tailnets with 50+ peers).
 - **Self-healing reconnect** — three-phase recovery (rebind → full restart → reboot) when the tailnet link goes stale.
 - **Auto `use_address` hint** — tells you exactly which line to add to your YAML so HA finds the device over Tailscale after first boot.
 - **Package-based install** — one `packages:` line in your YAML and all entities appear.
@@ -55,7 +55,7 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 
 ### Hardware
 
-- An **ESP32** board with **PSRAM** (recommended: 8 MB Octal PSRAM).
+- An **ESP32** board with **PSRAM — required** (recommended: 8 MB Octal PSRAM). Without PSRAM the device cannot allocate the control-plane buffers and will not connect.
 - **At least 4 MB flash** — enough for the bootloader plus two OTA slots of the ~1 MB firmware. 8 MB or more is only useful if you want to stack other large ESPHome components next to Tailscale.
 
 > **Current testing target:** active development and flashing is being done on **ESP32-S3**. Other ESP32 variants (classic ESP32, ESP32-C3, ESP32-C6, ESP32-P4, …) may work through the upstream [microlink](https://github.com/CamM2325/microlink) library, but most are **not yet verified** by this project. If you get the component running on a non-S3 chip, please open an issue / PR so we can list it here.
@@ -66,7 +66,7 @@ Boards currently verified:
 - **ESP32-S3-N16R8**
 - **AI-Thinker ESP32-CAM** (classic ESP32, 8 MB PSRAM revision) — community-confirmed in [#15](https://github.com/Csontikka/esphome-tailscale/issues/15) by @gastonc. Use `psram: mode: quad speed: 80MHz` (classic ESP32 has no octal PSRAM). Verified to run alongside the ESPHome `esp32_camera` component on the same device with 4 peers online over a direct Tailscale route — RAM and task scheduling fit comfortably with PSRAM enabled.
 
-> **Why PSRAM?** The Tailscale control protocol and WireGuard crypto state together need more RAM than a plain ESP32 has. Without PSRAM the component falls back to small buffers and caps around 30 peers — fine for small tailnets, rough for larger ones.
+> **Why PSRAM?** The Tailscale control protocol and WireGuard crypto state together need more contiguous RAM than a stock ESP32 has. The control-plane (HTTP/2 + JSON MapResponse) buffers alone can't be allocated from internal RAM, so **without PSRAM the device fails to fetch the tailnet map and never connects** — PSRAM is a hard requirement, not an optimization.
 
 ### Software
 
@@ -409,7 +409,7 @@ tailscale:
 | --- | --- | --- |
 | `auth_key` | *(required)* | Tailscale auth key (`tskey-auth-...`). Use `!secret`. |
 | `hostname` | `""` | Name the node registers as. Empty → Tailscale picks one. |
-| `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes *and* you have PSRAM. |
+| `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes (up to 64). |
 | `login_server` | `""` | Custom control-plane host. Empty uses the official Tailscale SaaS coordinator. Set to a Headscale (or other Tailscale-compatible) coordinator to point the node elsewhere. Accepts a bare hostname, an IP, `host:port`, or a full `http://host[:port]` URL; `https://` is rejected. Authentication and initial registration work end-to-end against Headscale 0.23.0; see *Custom control plane (Headscale)* under Deployment Notes for the current caveats. Leave empty for Tailscale SaaS. |
 
 > **No `update_interval`.** The component is fully event-driven: sensors publish only when the underlying state actually changes. There is no polling loop to tune — and nothing to reduce CPU/network cost by raising.
@@ -445,8 +445,8 @@ The `VPN Peers Direct` and `VPN Peers DERP` sensors tell you at a glance how you
 
 On boot the component queries `esp_psram_get_size()` and reports one of two modes:
 
-- **`PSRAM <size>KB`** — large buffers, full peer list support, up to 64 peers.
-- **`Internal RAM`** — small buffers, ~30-peer effective limit, works but not recommended.
+- **`PSRAM <size>KB`** — PSRAM detected and initialized; full peer list support, up to 64 peers. This is the required, working state.
+- **`Internal RAM`** — PSRAM was **not** detected/initialized. **The device will not work in this mode**: the control-plane buffers can't be allocated, so it can't fetch the tailnet map. Fix PSRAM init — see [Troubleshooting](#device-memory-shows-internal-ram-even-though-your-board-has-psram) below.
 
 Check the `Device Memory` sensor after first boot to confirm. If you expect PSRAM but see `Internal RAM`, see [Troubleshooting → `Device Memory` shows `Internal RAM` even though your board has PSRAM](#device-memory-shows-internal-ram-even-though-your-board-has-psram).
 
@@ -651,7 +651,7 @@ Direct UDP can still work through CGNAT for peers with publicly reachable endpoi
 
 Development and automated validation happen on ESP32-S3 with PSRAM. Other variants are documented as possible by the underlying libraries, but are not currently verified here.
 
-- **PSRAM is strongly recommended.** The WireGuard crypto buffers, microlink's internal state, and the ESPHome runtime together exceed what stock ESP32 internal RAM has to spare for a stable margin. Without PSRAM, `max_peers` above ~30 is not realistic.
+- **PSRAM is required.** The WireGuard crypto buffers, microlink's internal state, and the ESPHome runtime together exceed what stock ESP32 internal RAM can provide — in particular the control-plane buffers can't be allocated from internal RAM, so without PSRAM the device won't connect at all.
 - **CPU caps WireGuard throughput at roughly 2–5 Mbit/s** on ESP32-S3. This is ample for sensor telemetry and MQTT payloads, but too slow for image or video streaming through the tailnet.
 - **Flash 4 MB minimum, 8 MB or more recommended.** OTA requires enough free flash to hold a second firmware image alongside the running one.
 
@@ -756,7 +756,7 @@ tailscale:
   max_peers: 32  # or 48, or 64
 ```
 
-You need PSRAM for anything above ~30.
+PSRAM is required regardless; a higher `max_peers` just uses more of it (64 is the hard cap).
 
 ### `HA API Connection Route` shows `Tailscale (unknown)`
 
@@ -881,7 +881,7 @@ No. This component makes the ESP itself a Tailscale node — it does not adverti
 No. Funnel publishes services to the public internet — that's unrelated. Everything here is private, tailnet-only.
 
 **Q: Can I use this on a plain ESP32 (not S3)?**
-Active testing happens on ESP32-S3 with PSRAM — that's the only chip this project currently verifies. The underlying microlink library claims support for other ESP32 variants, but they are **not yet verified here**. PSRAM is strongly recommended regardless, because the Tailscale stack is too heavy for stock ESP32 RAM alone.
+Active testing happens on ESP32-S3 with PSRAM — that's the only chip this project currently verifies. The underlying microlink library claims support for other ESP32 variants, but they are **not yet verified here**. PSRAM is required regardless, because the Tailscale stack is too heavy for stock ESP32 RAM alone.
 
 **Q: Will this work over cellular / LTE / a hotspot?**
 Yes, as long as outbound UDP and HTTPS are allowed. DERP (TCP 443) is used as a fallback so even heavily-firewalled networks usually work.
