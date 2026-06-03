@@ -167,11 +167,11 @@ export default {
         const recent = await env.DB.prepare(
           `SELECT ts, device_hash, event_type, version, country, region, chip,
                   uptime_sec, boot_count, reset_reason, psram, connected, crash_sig
-             FROM events ORDER BY ts DESC LIMIT 50`).all();
+             FROM events ORDER BY ts DESC LIMIT 1000`).all();
         const topDev = await env.DB.prepare(
           `SELECT device_hash, first_seen, last_seen, last_version, last_country,
                   last_region, last_chip, total_events
-             FROM devices ORDER BY total_events DESC LIMIT 20`).all();
+             FROM devices ORDER BY total_events DESC LIMIT 1000`).all();
 
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
           ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -249,6 +249,13 @@ th{color:var(--mut);font-weight:500;font-size:12px;text-transform:uppercase}tr:l
 .scroll{overflow-x:auto}tr.row-crash{background:rgba(255,90,95,.07)}tr.row-crash td.crash-sig{color:var(--err);font-weight:600}
 .rr{font-size:11px;font-weight:600}.rr-ok{color:var(--ok)}.rr-err{color:var(--err)}.rr-warn{color:var(--warn)}.rr-mut{color:var(--mut)}
 a{color:var(--acc);text-decoration:none}.refresh{float:right;color:var(--mut);font-size:12px}.foot{color:var(--mut);font-size:11px;text-align:center;margin-top:24px}
+.rec-count{font-size:12px;font-weight:400;color:var(--mut);margin-left:8px;text-transform:none;letter-spacing:0}
+.rec-controls{padding:8px 16px;color:var(--mut);font-size:12px;border-bottom:1px solid var(--border)}
+.rec-controls select{background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font:12px inherit}
+.filter-row th{padding:4px 8px;background:rgba(255,255,255,.02)}
+.filter-row input{width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font:11px ui-monospace,Menlo,Consolas,monospace}
+.filter-row input::placeholder{color:var(--mut);opacity:.5}
+thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:hover{color:var(--fg)}
 </style></head><body><div class="wrap">
 <a href="" onclick="location.reload();return false" class="refresh">↻ refresh</a>
 <h1>esphome-tailscale telemetry</h1>
@@ -260,14 +267,63 @@ a{color:var(--acc);text-decoration:none}.refresh{float:right;color:var(--mut);fo
   <div class="panel"><h2>Countries</h2><table><thead><tr><th>Country</th><th class="num">Devices</th></tr></thead><tbody>${ctryRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
   <div class="panel"><h2>PSRAM</h2><table><thead><tr><th>PSRAM</th><th class="num">Devices</th></tr></thead><tbody>${psrRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
 </div>
-<div class="panel" style="margin-bottom:24px"><h2>Top devices</h2><div class="scroll"><table>
-  <thead><tr><th>Device hash</th><th>First seen</th><th>Last seen</th><th>Version</th><th>Chip</th><th>Geo</th><th class="num">Events</th></tr></thead>
+<div class="panel" style="margin-bottom:24px"><h2>Top devices <span id="top-count" class="rec-count"></span></h2>
+<div class="rec-controls">Show <select id="top-limit"><option>50</option><option>100</option><option>250</option><option>500</option><option>1000</option></select> rows · type under a header to filter (Excel-style) · click a header to sort</div>
+<div class="scroll"><table id="top-table">
+  <thead><tr><th>Device hash</th><th>First seen</th><th>Last seen</th><th>Version</th><th>Chip</th><th>Geo</th><th class="num">Events</th></tr>
+  <tr class="filter-row"><th><input data-col="0" placeholder="filter"></th><th><input data-col="1" placeholder="filter"></th><th><input data-col="2" placeholder="filter"></th><th><input data-col="3" placeholder="filter"></th><th><input data-col="4" placeholder="filter"></th><th><input data-col="5" placeholder="filter"></th><th><input data-col="6" placeholder="filter"></th></tr></thead>
   <tbody>${topRows || '<tr><td colspan=7>no data</td></tr>'}</tbody></table></div></div>
-<div class="panel"><h2>Recent activity (last 50)</h2><div class="scroll"><table>
-  <thead><tr><th>Time (Budapest)</th><th>Device</th><th>Type</th><th>Reset</th><th>Version</th><th>Geo</th><th>Chip</th><th class="num">Boot</th><th class="num">Up</th><th>PSRAM</th><th>Conn</th><th>Crash</th></tr></thead>
+<div class="panel"><h2>Recent activity <span id="rec-count" class="rec-count"></span></h2>
+<div class="rec-controls">Show <select id="rec-limit"><option>50</option><option>100</option><option>250</option><option>500</option><option>1000</option></select> rows · type under a header to filter (Excel-style) · click a header to sort</div>
+<div class="scroll"><table id="rec-table">
+  <thead><tr><th>Time (Budapest)</th><th>Device</th><th>Type</th><th>Reset</th><th>Version</th><th>Geo</th><th>Chip</th><th class="num">Boot</th><th class="num">Up</th><th>PSRAM</th><th>Conn</th><th>Crash</th></tr>
+  <tr class="filter-row"><th><input data-col="0" placeholder="filter"></th><th><input data-col="1" placeholder="filter"></th><th><input data-col="2" placeholder="filter"></th><th><input data-col="3" placeholder="filter"></th><th><input data-col="4" placeholder="filter"></th><th><input data-col="5" placeholder="filter"></th><th><input data-col="6" placeholder="filter"></th><th><input data-col="7" placeholder="filter"></th><th><input data-col="8" placeholder="filter"></th><th><input data-col="9" placeholder="filter"></th><th><input data-col="10" placeholder="filter"></th><th><input data-col="11" placeholder="filter"></th></tr></thead>
   <tbody>${recRows || '<tr><td colspan=12>no data</td></tr>'}</tbody></table></div></div>
 <div class="foot">esphome-tailscale-telemetry @ Cloudflare Workers · D1 stores UTC, dashboard renders Europe/Budapest · no IP at rest</div>
-</div></body></html>`;
+</div>
+<script>
+(function(){
+  function enhance(tableId, limitId, countId, defCol, defDir){
+    var table=document.getElementById(tableId);
+    if(!table||!table.tBodies[0])return;
+    var tbody=table.tBodies[0];
+    var allRows=Array.prototype.slice.call(tbody.rows);
+    var limitSel=document.getElementById(limitId);
+    var counter=document.getElementById(countId);
+    var filters=Array.prototype.slice.call(table.querySelectorAll('.filter-row input'));
+    var headers=Array.prototype.slice.call(table.querySelectorAll('thead tr:first-child th'));
+    var labels=headers.map(function(th){return th.textContent;});
+    var sortCol=defCol, sortDir=defDir;
+    function cellText(row,i){var c=row.cells[i];return c?(c.textContent||'').replace(/\\s+/g,' ').trim():'';}
+    function num(s){s=(s||'').trim();return /^-?\\d+(\\.\\d+)?$/.test(s)?parseFloat(s):NaN;}
+    function apply(){
+      var fv=filters.map(function(inp){return (inp.value||'').toLowerCase();});
+      var matched=allRows.filter(function(row){
+        for(var i=0;i<fv.length;i++){if(fv[i]&&cellText(row,i).toLowerCase().indexOf(fv[i])<0)return false;}
+        return true;
+      });
+      matched.sort(function(a,b){
+        var x=cellText(a,sortCol),y=cellText(b,sortCol),nx=num(x),ny=num(y),c;
+        if(!isNaN(nx)&&!isNaN(ny))c=nx-ny; else c=(x<y?-1:(x>y?1:0));
+        return c*sortDir;
+      });
+      var limit=parseInt(limitSel.value,10)||50, shown=0;
+      matched.forEach(function(row){if(shown<limit){tbody.appendChild(row);row.style.display='';shown++;}else{row.style.display='none';}});
+      allRows.forEach(function(row){if(matched.indexOf(row)<0)row.style.display='none';});
+      var anyF=fv.some(function(v){return v;});
+      counter.textContent='showing '+shown+' of '+matched.length+((anyF&&matched.length!==allRows.length)?(' (filtered from '+allRows.length+')'):'');
+      headers.forEach(function(th,i){th.textContent=labels[i]+(i===sortCol?(sortDir>0?' ▲':' ▼'):'');});
+    }
+    limitSel.addEventListener('change',apply);
+    filters.forEach(function(inp){inp.addEventListener('input',apply);});
+    headers.forEach(function(th,i){th.addEventListener('click',function(){if(sortCol===i){sortDir=-sortDir;}else{sortCol=i;sortDir=1;}apply();});});
+    apply();
+  }
+  enhance('rec-table','rec-limit','rec-count',0,-1);
+  enhance('top-table','top-limit','top-count',6,-1);
+})();
+</script>
+</body></html>`;
         return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       } catch (e) {
         return new Response('Admin error: ' + e.message, { status: 500 });
