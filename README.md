@@ -726,6 +726,14 @@ After flashing, the `Device Memory` sensor should report `PSRAM XXkB` and the VP
 
 **If you don't know which variant your board is**, the safe path is trial-and-error: try `mode: octal speed: 80MHz` first (most common ESP32-S3 dev boards are `N8R8` / `N16R8` octal), reflash, check the sensor. If it still says `Internal RAM`, switch to `mode: quad speed: 40MHz` and reflash again. One of the two will work — ESPHome's `psram:` block **forces the configured mode**, it does not auto-detect or fall back, so an octal chip configured for quad mode (or vice versa) simply fails to initialize PSRAM. Reported and resolved in [#9](https://github.com/Csontikka/esphome-tailscale/issues/9).
 
+### Can I run this on a board with no PSRAM (e.g. by disabling the PSRAM check)?
+
+**No — PSRAM is a hard requirement, and forcing the check off does not help.** The control-plane (HTTP/2 + JSON) buffers are a fixed 512 KB each and cannot be allocated from internal RAM, so a board without PSRAM never fetches the tailnet map and never connects ([#9](https://github.com/Csontikka/esphome-tailscale/issues/9)).
+
+A few forks patch the component to hardcode the detected PSRAM size to `0` (forcing the "no PSRAM" code path), hoping it enables a small-buffer mode. **That small-buffer mode was never implemented**, so the patch only guarantees the device can't connect — don't do it. If `Device Memory` reads `Internal RAM` on a board that *does* have PSRAM, that's a PSRAM init/config issue (see the section above), not a reason to bypass the check.
+
+Use any ESP32 with PSRAM (e.g. ESP32-S3 `N8R8` / `N16R8` / `N8R2` / `N16R2`).
+
 ### Auth key expired
 
 Symptom: the log shows `State: ERROR` / `REGISTERING` failing after a fresh flash, the `VPN Connected` binary sensor never turns on, and the admin console (Tailscale or Headplane) shows no new machine. This usually means the pre-authentication key you baked into the firmware has expired or been revoked.

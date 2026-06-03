@@ -13,6 +13,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 ### Added
 - **Material Design icons on every default-package entity.** Each entity in `packages/tailscale/tailscale.yaml` now ships a sensible `icon:` (e.g. `mdi:shield-check` for VPN Connected, `mdi:account-network` for Peers Online, `mdi:calendar-clock` for Node Key Expiry), so the Tailscale entities show meaningful glyphs in Home Assistant out of the box. Inspired by [@sorrypqa](https://github.com/sorrypqa)'s fork. Not a breaking change — the entity `name`/`id`/`unique_id` are unchanged, and you can still override any icon in HA per entity.
 
+### Documentation
+- **Troubleshooting:** added an entry explaining that PSRAM is a hard requirement and that forcing the PSRAM check off (as a few forks do by hardcoding the detected size to `0`) does **not** enable a working no-PSRAM mode — that small-buffer path was never implemented, so it only stops the device from connecting ([#9](https://github.com/Csontikka/esphome-tailscale/issues/9)).
+
 ## [0.4.2] — 2026-06-03
 
 ### Changed
