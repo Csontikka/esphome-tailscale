@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-06-03
+
 ### Changed
 - **Telemetry device id now carries a 2-character integrity check.** The on-the-wire id is 18 hex chars: the same one-way 16-hex anonymous id plus a 2-hex check (`SHA-256(salt + id)[0]`). The receiving Worker recomputes the check from the id and drops random/garbage posts — cheap anti-abuse friction, not authentication. **Backward compatible:** firmware ≤ 0.4.1 (bare 16-hex id, no check) is still accepted through **2026-08-31 UTC**; from 2026-09-01 only the 18-hex form is accepted, so update before then. The stored anonymous id is unchanged (still the 16-hex hash) — no new data is collected (`components/tailscale/telemetry.{h,cpp}`, `telemetry/worker.js`).
 - **Telemetry status now logs through the standard ESPHome logger** instead of raw ESP-IDF logging (which was invisible at default log levels) — init and send results now show under the `tailscale.telemetry` tag.
