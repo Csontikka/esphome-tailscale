@@ -268,13 +268,13 @@ thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:
   <div class="panel"><h2>PSRAM</h2><table><thead><tr><th>PSRAM</th><th class="num">Devices</th></tr></thead><tbody>${psrRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
 </div>
 <div class="panel" style="margin-bottom:24px"><h2>Top devices <span id="top-count" class="rec-count"></span></h2>
-<div class="rec-controls">Show <select id="top-limit"><option>50</option><option>100</option><option>250</option><option>500</option><option>1000</option></select> rows · type under a header to filter (Excel-style) · click a header to sort</div>
+<div class="rec-controls">Show <select id="top-limit"><option>50</option><option>100</option><option>250</option><option>500</option><option>1000</option></select> rows</div>
 <div class="scroll"><table id="top-table">
   <thead><tr><th>Device hash</th><th>First seen</th><th>Last seen</th><th>Version</th><th>Chip</th><th>Geo</th><th class="num">Events</th></tr>
   <tr class="filter-row"><th><input data-col="0" placeholder="filter"></th><th><input data-col="1" placeholder="filter"></th><th><input data-col="2" placeholder="filter"></th><th><input data-col="3" placeholder="filter"></th><th><input data-col="4" placeholder="filter"></th><th><input data-col="5" placeholder="filter"></th><th><input data-col="6" placeholder="filter"></th></tr></thead>
   <tbody>${topRows || '<tr><td colspan=7>no data</td></tr>'}</tbody></table></div></div>
 <div class="panel"><h2>Recent activity <span id="rec-count" class="rec-count"></span></h2>
-<div class="rec-controls">Show <select id="rec-limit"><option>50</option><option>100</option><option>250</option><option>500</option><option>1000</option></select> rows · type under a header to filter (Excel-style) · click a header to sort</div>
+<div class="rec-controls">Show <select id="rec-limit"><option>50</option><option>100</option><option>250</option><option>500</option><option>1000</option></select> rows</div>
 <div class="scroll"><table id="rec-table">
   <thead><tr><th>Time (Budapest)</th><th>Device</th><th>Type</th><th>Reset</th><th>Version</th><th>Geo</th><th>Chip</th><th class="num">Boot</th><th class="num">Up</th><th>PSRAM</th><th>Conn</th><th>Crash</th></tr>
   <tr class="filter-row"><th><input data-col="0" placeholder="filter"></th><th><input data-col="1" placeholder="filter"></th><th><input data-col="2" placeholder="filter"></th><th><input data-col="3" placeholder="filter"></th><th><input data-col="4" placeholder="filter"></th><th><input data-col="5" placeholder="filter"></th><th><input data-col="6" placeholder="filter"></th><th><input data-col="7" placeholder="filter"></th><th><input data-col="8" placeholder="filter"></th><th><input data-col="9" placeholder="filter"></th><th><input data-col="10" placeholder="filter"></th><th><input data-col="11" placeholder="filter"></th></tr></thead>
