@@ -10,6 +10,11 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-03
+
+### Added
+- **Anonymous telemetry (on by default; one YAML line to opt out).** On boot, then roughly once a day, the component POSTs a small anonymous JSON event to a Cloudflare Worker over HTTPS. The entire payload: an anonymous device id (`SHA-256(WiFi MAC + salt)[0..7]`, one-way), component version, event type, chip model, uptime, boot count, reset reason, PSRAM-present flag, and tailnet-connected flag — never the MAC, SSID, IP, tailnet name, peers, or auth key. The device sends no IP; the Worker stores only coarse geo (country/region from the Cloudflare edge), never the IP. Turn it off with `disable_telemetry: true`. Implementation: `components/tailscale/telemetry.{h,cpp}`; backend: `telemetry/worker.js`. See the [Telemetry](README.md#telemetry) section.
+
 ## [0.3.0] — 2026-06-03
 
 ### Changed

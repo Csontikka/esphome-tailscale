@@ -42,6 +42,7 @@ class TailscaleComponent : public Component {
   void set_hostname(const std::string &hostname) { this->hostname_ = hostname; }
   void set_max_peers(uint8_t max) { this->max_peers_ = max; }
   void set_login_server(const std::string &server) { this->login_server_ = server; }
+  void set_telemetry_disabled(bool disabled) { this->telemetry_disabled_ = disabled; }
   void set_debug_log_switch(switch_::Switch *sw) { this->debug_log_switch_ = sw; }
   void apply_debug_log(bool enabled);
   void apply_runtime_auth_key(const std::string &key);
@@ -147,6 +148,7 @@ class TailscaleComponent : public Component {
   std::string hostname_;
   uint8_t max_peers_{16};
   std::string login_server_;
+  bool telemetry_disabled_{false};
 
   // Runtime
   microlink_t *ml_{nullptr};

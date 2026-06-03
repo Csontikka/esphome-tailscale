@@ -1,0 +1,14 @@
+name = "esphome-tailscale-telemetry"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Anonymous telemetry backend for the esphome-tailscale component.
+# Separate D1 database + key from the esp32-tailscale-subnet-router worker.
+# Secrets (set out-of-band, never committed):
+#   TLM_KEY     — must match TAILSCALE_TELEMETRY_KEY in components/tailscale/telemetry.h
+#   ADMIN_PASS  — HTTP Basic password for /admin
+
+[[d1_databases]]
+binding = "DB"
+database_name = "esphome_tailscale_telemetry"
+database_id = "2374bb61-7e67-4661-8a92-cb242b3ad897"

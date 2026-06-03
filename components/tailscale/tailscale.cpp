@@ -1,4 +1,5 @@
 #include "tailscale.h"
+#include "telemetry.h"
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include "esphome/components/network/util.h"
@@ -169,6 +170,10 @@ void TailscaleComponent::start_microlink_() {
   this->microlink_start_ms_ = millis();
   this->registration_failed_logged_ = false;
   ESP_LOGI(TAG, "Tailscale started after network connected!");
+
+  // Anonymous telemetry (on by default; opt out with `disable_telemetry: true`).
+  // Network is up here, so the sender task can reach the Cloudflare endpoint.
+  telemetry_init(!this->telemetry_disabled_);
 }
 
 void TailscaleComponent::loop() {
@@ -423,6 +428,7 @@ void TailscaleComponent::peer_callback(microlink_t *ml, const microlink_peer_inf
 
 void TailscaleComponent::publish_state_() {
   bool connected = this->is_connected();
+  telemetry_set_connected(connected);
 
 #ifdef USE_BINARY_SENSOR
   if (this->connected_sensor_ != nullptr &&

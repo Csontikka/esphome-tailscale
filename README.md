@@ -411,6 +411,7 @@ tailscale:
 | `hostname` | `""` | Name the node registers as. Empty → Tailscale picks one. |
 | `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes (up to 64). |
 | `login_server` | `""` | Custom control-plane host. Empty uses the official Tailscale SaaS coordinator. Set to a Headscale (or other Tailscale-compatible) coordinator to point the node elsewhere. Accepts a bare hostname, an IP, `host:port`, or a full `http://host[:port]` URL; `https://` is rejected. Authentication and initial registration work end-to-end against Headscale 0.23.0; see *Custom control plane (Headscale)* under Deployment Notes for the current caveats. Leave empty for Tailscale SaaS. |
+| `disable_telemetry` | `false` | Set to `true` to turn off the anonymous telemetry (see [Telemetry](#telemetry)). |
 
 > **No `update_interval`.** The component is fully event-driven: sensors publish only when the underlying state actually changes. There is no polling loop to tune — and nothing to reduce CPU/network cost by raising.
 
@@ -906,6 +907,20 @@ Yes, but it requires a YAML edit (`login_server`) and a reflash. The auth key ca
 
 **Q: Can I ping the ESP from another tailnet node?**
 Yes. Once connected, it responds to ICMP on its `100.x` address like any other Tailscale node. Great for sanity checks.
+
+---
+
+## Telemetry
+
+The component sends a small **anonymous** telemetry event to a Cloudflare Worker on boot, then roughly once a day. It is **on by default**; to turn it off, set `disable_telemetry: true` under `tailscale:`.
+
+The entire payload is: an anonymous device id (first 8 bytes of `SHA-256(WiFi MAC + fixed salt)` — one-way, cannot be reversed to the MAC), the component version, event type (`boot`/`heartbeat`), chip model + revision, uptime, boot count, reset reason, whether PSRAM is present, and whether the node is connected to the tailnet. It **never** sends the MAC, WiFi SSID, IP address, tailnet name, peer information, or your auth key. The device sends no IP; the receiving Worker stores only coarse geo (country/region from the Cloudflare edge), never the IP. The implementation is `components/tailscale/telemetry.{h,cpp}` and the backend is `telemetry/worker.js`.
+
+```yaml
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  disable_telemetry: true   # opt out
+```
 
 ---
 

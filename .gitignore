@@ -8,3 +8,7 @@ __pycache__/
 .omc/
 screenshots/
 include_fix/
+
+# telemetry deploy artifacts (not secrets, but local)
+telemetry/.d1-id
+telemetry/.wrangler/
