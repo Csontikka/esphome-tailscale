@@ -10,6 +10,10 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Changed
+- **Telemetry admin dashboard:** the "Events by type" panel is now "Events by type + reset" — events are broken down by event type **and** reset reason (color-coded), matching the sibling project's view (`telemetry/worker.js`). Backend/admin only — no device firmware change.
+- **Telemetry admin dashboard:** the "Total events" card and the `/v1/stats` `events_total` field now sum the per-device lifetime counters (`SUM(devices.total_events)`) instead of counting rows in the capped `events` table, so the figure is a true lifetime total that never drops when old per-device rows age out. Backend/admin only.
+
 ## [0.4.2] — 2026-06-03
 
 ### Changed

@@ -217,10 +217,10 @@ export default {
       try {
         await ensureSchema(env);
         const dev = await env.DB.prepare('SELECT COUNT(*) AS n FROM devices').first();
-        const ev  = await env.DB.prepare('SELECT COUNT(*) AS n FROM events').first();
+        const ev  = await env.DB.prepare('SELECT COALESCE(SUM(total_events),0) AS n FROM devices').first();
         const a24 = await env.DB.prepare(`SELECT COUNT(*) AS n FROM devices WHERE last_seen >= strftime('%s','now') - 86400`).first();
         const a7d = await env.DB.prepare(`SELECT COUNT(*) AS n FROM devices WHERE last_seen >= strftime('%s','now') - 604800`).first();
-        const byType = await env.DB.prepare('SELECT event_type, COUNT(*) AS n FROM events GROUP BY event_type ORDER BY n DESC').all();
+        const byType = await env.DB.prepare(`SELECT event_type, reset_reason, COUNT(*) AS n FROM events GROUP BY event_type, reset_reason ORDER BY n DESC`).all();
         const vers = await env.DB.prepare(`SELECT COALESCE(last_version,'(unknown)') AS v, COUNT(*) AS n FROM devices GROUP BY last_version ORDER BY n DESC LIMIT 20`).all();
         const ctry = await env.DB.prepare(`SELECT COALESCE(last_country,'(unknown)') AS c, COUNT(*) AS n FROM devices GROUP BY last_country ORDER BY n DESC LIMIT 20`).all();
         const psr  = await env.DB.prepare(`SELECT last_psram AS p, COUNT(*) AS n FROM devices GROUP BY last_psram ORDER BY n DESC`).all();
@@ -257,7 +257,10 @@ export default {
 
         const cards = [['Total devices',dev.n],['Active 24h',a24.n],['Active 7d',a7d.n],['Total events',ev.n]]
           .map(([l,v]) => `<div class="card"><div class="card-v">${esc(v)}</div><div class="card-l">${esc(l)}</div></div>`).join('');
-        const typeRows = byType.results.map(r => `<tr><td><span class="tag tag-${esc(r.event_type)}">${esc(r.event_type)}</span></td><td class="num">${esc(r.n)}</td></tr>`).join('');
+        const typeRows = byType.results.map(r => {
+          const [rrL, rrC] = rrLabel(r.reset_reason);
+          return `<tr><td><span class="tag tag-${esc(r.event_type)}">${esc(r.event_type)}</span></td><td><span class="rr rr-${rrC}">${esc(rrL)}</span></td><td class="num">${esc(r.n)}</td></tr>`;
+        }).join('');
         const verRows  = vers.results.map(r => `<tr><td class="mono">${esc(r.v)}</td><td class="num">${esc(r.n)}</td></tr>`).join('');
         const ctryRows = ctry.results.map(r => `<tr><td>${esc(r.c)}</td><td class="num">${esc(r.n)}</td></tr>`).join('');
         const psrRows  = psr.results.map(r => `<tr><td>${r.p == null ? '(unknown)' : (r.p ? 'PSRAM' : 'no PSRAM')}</td><td class="num">${esc(r.n)}</td></tr>`).join('');
@@ -322,7 +325,7 @@ thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:
 <div class="sub">Generated ${esc(nowBp)} <strong>Europe/Budapest</strong> · <a href="/v1/stats">JSON API</a></div>
 <div class="cards">${cards}</div>
 <div class="grid">
-  <div class="panel"><h2>Events by type</h2><table><thead><tr><th>Type</th><th class="num">Count</th></tr></thead><tbody>${typeRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
+  <div class="panel"><h2>Events by type + reset</h2><table><thead><tr><th>Type</th><th>Reset</th><th class="num">Count</th></tr></thead><tbody>${typeRows || '<tr><td colspan=3>no data</td></tr>'}</tbody></table></div>
   <div class="panel"><h2>Versions</h2><table><thead><tr><th>Version</th><th class="num">Devices</th></tr></thead><tbody>${verRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
   <div class="panel"><h2>Countries</h2><table><thead><tr><th>Country</th><th class="num">Devices</th></tr></thead><tbody>${ctryRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
   <div class="panel"><h2>PSRAM</h2><table><thead><tr><th>PSRAM</th><th class="num">Devices</th></tr></thead><tbody>${psrRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
@@ -397,7 +400,7 @@ thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:
       try {
         await ensureSchema(env);
         const dev = await env.DB.prepare('SELECT COUNT(*) AS n FROM devices').first();
-        const ev  = await env.DB.prepare('SELECT COUNT(*) AS n FROM events').first();
+        const ev  = await env.DB.prepare('SELECT COALESCE(SUM(total_events),0) AS n FROM devices').first();
         const a24 = await env.DB.prepare(`SELECT COUNT(*) AS n FROM devices WHERE last_seen >= strftime('%s','now') - 86400`).first();
         const byType = await env.DB.prepare('SELECT event_type, COUNT(*) AS n FROM events GROUP BY event_type').all();
         const vers = await env.DB.prepare(`SELECT last_version AS v, COUNT(*) AS n FROM devices WHERE last_version IS NOT NULL GROUP BY last_version ORDER BY n DESC LIMIT 20`).all();
