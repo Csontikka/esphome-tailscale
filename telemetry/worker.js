@@ -342,7 +342,7 @@ thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:
   <thead><tr><th>Time (Budapest)</th><th>Device</th><th>Type</th><th>Reset</th><th>Version</th><th>Geo</th><th>Chip</th><th class="num">Boot</th><th class="num">Up</th><th>PSRAM</th><th>Conn</th><th>Crash</th></tr>
   <tr class="filter-row"><th><input data-col="0" placeholder="filter"></th><th><input data-col="1" placeholder="filter"></th><th><input data-col="2" placeholder="filter"></th><th><input data-col="3" placeholder="filter"></th><th><input data-col="4" placeholder="filter"></th><th><input data-col="5" placeholder="filter"></th><th><input data-col="6" placeholder="filter"></th><th><input data-col="7" placeholder="filter"></th><th><input data-col="8" placeholder="filter"></th><th><input data-col="9" placeholder="filter"></th><th><input data-col="10" placeholder="filter"></th><th><input data-col="11" placeholder="filter"></th></tr></thead>
   <tbody>${recRows || '<tr><td colspan=12>no data</td></tr>'}</tbody></table></div></div>
-<div class="foot">esphome-tailscale-telemetry @ Cloudflare Workers · D1 stores UTC, dashboard renders Europe/Budapest · no IP at rest</div>
+<div class="foot">esphome-tailscale-telemetry @ Cloudflare Workers · D1 esphome_tailscale_telemetry · DB stores UTC, dashboard renders Europe/Budapest</div>
 </div>
 <script>
 (function(){
