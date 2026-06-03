@@ -28,63 +28,81 @@ binary_sensor:
   - platform: tailscale
     connected:
       name: "VPN Connected"
+      icon: mdi:shield-check
       id: tailscale_connected
     key_expiry_warning:
       name: "VPN Node Key Expiry Warning"
+      icon: mdi:key-alert
       id: tailscale_key_expiry_warning
     ha_connected:
       name: "HA API Connected"
+      icon: mdi:home-assistant
       id: tailscale_ha_connected
     vpn_auto_rollback:
       name: "VPN Auto-Rollback"
+      icon: mdi:backup-restore
       id: tailscale_vpn_auto_rollback
 
 text_sensor:
   - platform: tailscale
     ip_address:
       name: "VPN IP"
+      icon: mdi:ip-network
       id: tailscale_ip_address
     vpn_hostname:
       name: "VPN Hostname"
+      icon: mdi:rename-box
       id: tailscale_vpn_hostname
     memory_mode:
       name: "Device Memory"
+      icon: mdi:memory
       id: tailscale_memory_mode
     setup_status:
       name: "VPN Setup Hint"
+      icon: mdi:lightbulb-on-outline
       id: tailscale_setup_status
     peer_status:
       name: "VPN Peer Status"
+      icon: mdi:lan
       id: tailscale_peer_status
     magicdns:
       name: "VPN MagicDNS"
+      icon: mdi:dns
       id: tailscale_magicdns
     network_name:
       name: "VPN Network"
+      icon: mdi:network-outline
       id: tailscale_network_name
     key_expiry:
       name: "VPN Node Key Expiry"
+      icon: mdi:calendar-clock
       id: tailscale_key_expiry
     ha_connection_route:
       name: "HA API Connection Route"
+      icon: mdi:routes
       id: tailscale_ha_connection_route
     ha_connection_ip:
       name: "HA API Connection IP"
+      icon: mdi:ip-network-outline
       id: tailscale_ha_connection_ip
     control_plane:
       name: "VPN Control Plane"
+      icon: mdi:cloud-cog-outline
       id: tailscale_control_plane
     login_server:
       name: "VPN Login Server"
+      icon: mdi:login-variant
       id: tailscale_login_server
     auth_key_status:
       name: "VPN Auth Key Source"
+      icon: mdi:shield-key-outline
       id: tailscale_auth_key_status
 
 text:
   - platform: tailscale
     auth_key:
       name: "VPN Auth Key Override"
+      icon: mdi:key-variant
       id: tailscale_auth_key_override
       mode: password
 
@@ -92,6 +110,7 @@ button:
   - platform: tailscale
     reconnect:
       name: "VPN Reconnect"
+      icon: mdi:connection
       id: tailscale_reconnect
   - platform: restart
     name: "Reboot"
@@ -100,29 +119,37 @@ sensor:
   - platform: tailscale
     peers_online:
       name: "VPN Peers Online"
+      icon: mdi:account-network
       id: tailscale_peers_online
     peers_direct:
       name: "VPN Peers Direct"
+      icon: mdi:lan-connect
       id: tailscale_peers_direct
     peers_derp:
       name: "VPN Peers DERP"
+      icon: mdi:server-network
       id: tailscale_peers_derp
     peers_max:
       name: "VPN Peers Max"
+      icon: mdi:account-multiple
       id: tailscale_peers_max
     uptime:
       name: "VPN Uptime"
+      icon: mdi:timer-outline
       id: tailscale_uptime
     connections:
       name: "VPN Connect Count"
+      icon: mdi:counter
       id: tailscale_connections
 
 switch:
   - platform: tailscale
     vpn_enabled:
       name: "VPN Enabled"
+      icon: mdi:vpn
       id: tailscale_vpn_enabled
     debug_log:
       name: "VPN Debug Log"
+      icon: mdi:bug-outline
       id: tailscale_debug_log
       restore_mode: RESTORE_DEFAULT_OFF
