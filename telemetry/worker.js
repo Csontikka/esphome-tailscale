@@ -234,7 +234,7 @@ export default {
              FROM devices ORDER BY total_events DESC LIMIT 1000`).all();
         const schema = await env.DB.prepare(
           `SELECT name, sql FROM sqlite_master WHERE type='table'
-             AND name IN ('events','devices','device_versions') ORDER BY name`).all();
+             AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf%' ORDER BY name`).all();
 
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
           ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
