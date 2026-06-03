@@ -232,6 +232,9 @@ export default {
           `SELECT device_hash, first_seen, last_seen, last_version, last_country,
                   last_region, last_chip, total_events
              FROM devices ORDER BY total_events DESC LIMIT 1000`).all();
+        const schema = await env.DB.prepare(
+          `SELECT name, sql FROM sqlite_master WHERE type='table'
+             AND name IN ('events','devices','device_versions') ORDER BY name`).all();
 
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
           ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -290,6 +293,8 @@ export default {
              <td>${esc(fmtGeo(r.last_country, r.last_region))}</td>
              <td class="num">${esc(r.total_events)}</td>
            </tr>`).join('');
+        const schemaRows = schema.results.map(r => `<tr><td class="mono">${esc(r.name)}</td><td class="mono" style="white-space:pre-wrap;font-size:11px">${esc(r.sql)}</td></tr>`).join('');
+        const tsRows = recent.results.slice(0, 5).map(r => `<tr><td class="mono">${esc(r.ts)}</td><td><span class="rr rr-ok">unix-s</span></td><td class="mono">${esc(fmtTs(r.ts))}</td></tr>`).join('');
 
         const html = `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -342,6 +347,13 @@ thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:
   <thead><tr><th>Time (Budapest)</th><th>Device</th><th>Type</th><th>Reset</th><th>Version</th><th>Geo</th><th>Chip</th><th class="num">Boot</th><th class="num">Up</th><th>PSRAM</th><th>Conn</th><th>Crash</th></tr>
   <tr class="filter-row"><th><input data-col="0" placeholder="filter"></th><th><input data-col="1" placeholder="filter"></th><th><input data-col="2" placeholder="filter"></th><th><input data-col="3" placeholder="filter"></th><th><input data-col="4" placeholder="filter"></th><th><input data-col="5" placeholder="filter"></th><th><input data-col="6" placeholder="filter"></th><th><input data-col="7" placeholder="filter"></th><th><input data-col="8" placeholder="filter"></th><th><input data-col="9" placeholder="filter"></th><th><input data-col="10" placeholder="filter"></th><th><input data-col="11" placeholder="filter"></th></tr></thead>
   <tbody>${recRows || '<tr><td colspan=12>no data</td></tr>'}</tbody></table></div></div>
+<div class="panel" style="margin-top:24px"><h2>Schema sanity <span class="rec-count">(timestamps are UTC unix seconds)</span></h2>
+<div class="scroll"><table>
+  <thead><tr><th>Table</th><th>CREATE TABLE</th></tr></thead>
+  <tbody>${schemaRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
+<div class="scroll"><table>
+  <thead><tr><th>events.ts (raw)</th><th>Kind</th><th>Rendered (Budapest)</th></tr></thead>
+  <tbody>${tsRows || '<tr><td colspan=3>no data</td></tr>'}</tbody></table></div></div>
 <div class="foot">esphome-tailscale-telemetry @ Cloudflare Workers · D1 esphome_tailscale_telemetry · DB stores UTC, dashboard renders Europe/Budapest</div>
 </div>
 <script>
