@@ -252,6 +252,22 @@ export default {
         const fmtDur = (s) => s == null ? '-' : s < 60 ? s + 's' : s < 3600 ? Math.floor(s/60)+'m' : s < 86400 ? Math.floor(s/3600)+'h' : Math.floor(s/86400)+'d';
         const fmtGeo = (c, r) => [c, r].filter(Boolean).join(' / ') || '-';
         const yn = (b) => b == null ? '-' : (b ? 'yes' : 'no');
+        /* Pretty-print a sqlite_master CREATE statement at render time (DB
+         * untouched): break only on top-level commas so strftime('%s','now') and
+         * PRIMARY KEY (a, b) inner commas stay intact; one column per line. */
+        const fmtDdl = (sql) => {
+          if (!sql) return '(no ddl)';
+          const i = sql.indexOf('('), j = sql.lastIndexOf(')');
+          if (i < 0 || j < 0 || j < i) return sql;
+          const head = sql.slice(0, i).trim(), body = sql.slice(i + 1, j);
+          const cols = []; let depth = 0, cur = '';
+          for (const ch of body) {
+            if (ch === '(') depth++; else if (ch === ')') depth--;
+            if (ch === ',' && depth === 0) { cols.push(cur); cur = ''; } else cur += ch;
+          }
+          if (cur.trim()) cols.push(cur);
+          return head + ' (\n  ' + cols.map(c => c.replace(/\s+/g, ' ').trim()).filter(Boolean).join(',\n  ') + '\n)';
+        };
         const rrLabel = (rr) => {
           const m = {0:['UNKNOWN','mut'],1:['POWERON','ok'],2:['EXT','ok'],3:['SW','mut'],4:['PANIC','err'],5:['INT_WDT','err'],6:['TASK_WDT','err'],7:['WDT','err'],8:['DEEPSLEEP','mut'],9:['BROWNOUT','err'],10:['SDIO','mut']};
           return rr == null ? ['-','mut'] : (m[rr] || [String(rr),'mut']);
@@ -293,7 +309,7 @@ export default {
              <td>${esc(fmtGeo(r.last_country, r.last_region))}</td>
              <td class="num">${esc(r.total_events)}</td>
            </tr>`).join('');
-        const schemaRows = schema.results.map(r => `<tr><td class="mono">${esc(r.name)}</td><td class="mono" style="white-space:pre-wrap;font-size:11px">${esc(r.sql)}</td></tr>`).join('');
+        const schemaRows = schema.results.map(r => `<tr><td class="mono">${esc(r.name)}</td><td class="mono" style="white-space:pre-wrap;font-size:11px">${esc(fmtDdl(r.sql))}</td></tr>`).join('');
         const tsRows = recent.results.slice(0, 5).map(r => `<tr><td class="mono">${esc(r.ts)}</td><td><span class="rr rr-ok">unix-s</span></td><td class="mono">${esc(fmtTs(r.ts))}</td></tr>`).join('');
 
         const html = `<!doctype html><html lang="en"><head>
