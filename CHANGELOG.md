@@ -10,6 +10,14 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Changed
+- **Updated the vendored microlink library to the consolidated dev line (`058b374`).** Large upstream jump that brings the DERP / WireGuard work which previously lived only on feature branches:
+  - DERP relay client split into concurrent reader + writer tasks, and the exit-node throughput collapse eliminated (TLS-write backpressure no longer forces a reconnect; `TCP_NODELAY` + frame coalescing; fixed the non-blocking-socket I/O hot-spin that starved other tasks).
+  - WireGuard DERP fallback is now gated on the WG data plane (`wireguardif_peer_is_up()`) instead of the DISCO has-direct-path latch — fixes the after-roam/reboot wedge where a peer with live DISCO pongs but no completed WG handshake was never relayed.
+  - control-plane + DERP sockets pinned to the upstream STA netif so they don't blackhole when an exit node flips `netif_default` to the tunnel.
+  - new netcheck module (DERP-region RTT measurement) plus assorted WG/heap/stability fixes and a coord/DERP teardown use-after-free fix.
+- microlink's bundled x25519 is namespaced to `ml_x25519` so it no longer clashes with wireguard_lwip's identical `x25519` in the vendored build (object-file/symbol de-duplication; no functional change).
+
 ### Documentation
 - **PSRAM is now documented as required, not "recommended".** The previous docs claimed the component falls back to small buffers and works without PSRAM (~30 peers) — that small-buffer mode was never actually implemented: the HTTP/2 + JSON control-plane buffers are a fixed 512 KB each and cannot be allocated from internal RAM, so a no-PSRAM board fails to fetch the tailnet map and never connects (this is [#9](https://github.com/Csontikka/esphome-tailscale/issues/9)). README and the `Device Memory` "Internal RAM" description updated to state PSRAM is a hard requirement.
 

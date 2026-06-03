@@ -46,18 +46,43 @@
 #include "wireguard.h"
 #include "crypto.h"
 #include "lwip_compat.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
 
 #include <stdio.h>
 #include <stdbool.h>
 
-// Debug logging - disable for production to reduce CPU/thermal load
-// Set to 0 to disable verbose WireGuard debug output
+static const char *TAG = "wg";
+
+// Per-packet verbose debug (data path, ~140 pps) - disable for production.
+// Set to 0 to disable verbose WireGuard debug output. The low-frequency
+// control/handshake-path diagnostics below are emitted via ESP_LOGW instead
+// of raw printf so the SD flight-recorder (esp_log_set_vprintf hook) captures
+// them; raw printf is NOT captured. They are WARN level on purpose: this build
+// sets CONFIG_LOG_MAXIMUM_LEVEL=2 (WARN), so ESP_LOGI/D are compiled OUT and
+// would never reach the recorder. Keep this 0: those WG_DEBUG markers sit on
+// the per-packet data path and would flood both serial and the SD card.
 #define WG_DEBUG_LOGGING 0
 
 #if WG_DEBUG_LOGGING
 #define WG_DEBUG(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
 #else
 #define WG_DEBUG(...) do {} while(0)
+#endif
+
+/* Handshake-attempt trace. The per-attempt control logs ([WG_PERIODIC] retry,
+ * [WG_OUT_OK] handshake-init egress, [WG_TX] init-sent, [WG_REKEY]) fire once
+ * per handshake retry AND, for [WG_REKEY], once per *data packet* while a
+ * keypair is stuck expired — i.e. a flood for offline DERP peers / stuck
+ * rekeys. Gate them behind this flag (default OFF) so they don't fill the SD
+ * recorder; flip to 1 to debug the handshake/DERP send path again. The rare,
+ * high-value logs (WG_OUT_FAIL, all WG_RX, HANDSHAKE COMPLETE / SESSION
+ * ESTABLISHED, WG_RESET/DESTROY, force_derp) stay unconditional ESP_LOGW. */
+#define WG_HS_TRACE 0
+#if WG_HS_TRACE
+#define WG_HSLOG(...) ESP_LOGW(TAG, __VA_ARGS__)
+#else
+#define WG_HSLOG(...) do {} while(0)
 #endif
 
 #define WIREGUARDIF_TIMER_MSECS 400
@@ -92,33 +117,52 @@ static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr,
 	peer->port = port;
 }
 
+/* Count contiguous high bits in an IPv4 mask (host order). */
+static int mask_prefix_len(uint32_t mask_hbo) {
+	int n = 0;
+	uint32_t m = mask_hbo;
+	while (m & 0x80000000UL) { n++; m <<= 1; }
+	return n;
+}
+
 static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device *device, const ip_addr_t *ipaddr) {
-	struct wireguard_peer *result = NULL;
-	struct wireguard_peer *fallback = NULL;
-	struct wireguard_peer *tmp;
-	int x;
-	int y;
-	for (x=0; x < WIREGUARD_MAX_PEERS; x++) {
-		tmp = &device->peers[x];
-		if (tmp->valid) {
-			for (y=0; y < WIREGUARD_MAX_SRC_IPS; y++) {
-				if ((tmp->allowed_source_ips[y].valid) && IP_ADDR_NETCMP_COMPAT(ipaddr, &tmp->allowed_source_ips[y].ip, &tmp->allowed_source_ips[y].mask)) {
-					// Prefer peers with valid keypairs (can actually send encrypted data)
-					// This optimization is from GrieferPig's fork
-					if (tmp->curr_keypair.valid || tmp->prev_keypair.valid) {
-						result = tmp;
-						break;
-					} else if (!fallback) {
-						// Remember first match without valid keypair as fallback
-						fallback = tmp;
-					}
-					break;
-				}
+	/* Longest-prefix match across every peer's allowed_source_ips.
+	 *
+	 * Without this, an exit-node peer with 0.0.0.0/0 swallows ALL CGNAT
+	 * destinations and prevents direct tailnet peer reachability while
+	 * exit-node mode is on. Tailscale's wgcfg layer does the same LPM.
+	 *
+	 * Tie-break: among equally-specific matches prefer one with a valid
+	 * keypair (can actually send encrypted data right now). */
+	struct wireguard_peer *best = NULL;
+	int best_prefix = -1;
+	bool best_has_keypair = false;
+	int x, y;
+	for (x = 0; x < WIREGUARD_MAX_PEERS; x++) {
+		struct wireguard_peer *tmp = &device->peers[x];
+		if (!tmp->valid) continue;
+		for (y = 0; y < WIREGUARD_MAX_SRC_IPS; y++) {
+			struct wireguard_allowed_ip *aip = &tmp->allowed_source_ips[y];
+			if (!aip->valid) continue;
+			if (!IP_ADDR_NETCMP_COMPAT(ipaddr, &aip->ip, &aip->mask)) continue;
+
+#if LWIP_IPV4
+			uint32_t mask_hbo = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&aip->mask)));
+#else
+			uint32_t mask_hbo = 0;
+#endif
+			int plen = mask_prefix_len(mask_hbo);
+			bool has_kp = (tmp->curr_keypair.valid || tmp->prev_keypair.valid);
+
+			if (plen > best_prefix ||
+			    (plen == best_prefix && has_kp && !best_has_keypair)) {
+				best = tmp;
+				best_prefix = plen;
+				best_has_keypair = has_kp;
 			}
-			if (result) break;
 		}
 	}
-	return result ? result : fallback;
+	return best;
 }
 
 static bool wireguardif_can_send_initiation(struct wireguard_peer *peer) {
@@ -131,63 +175,113 @@ static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct
 	WG_DEBUG("[WG_OUT] peer_output: endpoint=%s:%u, tot_len=%u\n",
 	       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip), peer->port, (unsigned)q->tot_len);
 
+	/* Control-packet detector for the SD-captured routing trace below.
+	 * WG message type byte 0: 1=init, 2=response, 3=cookie, 4=data. We only
+	 * log the rare control packets (handshake/cookie) so the per-packet data
+	 * path (type 4, ~140 pps) stays silent — no flood, negligible overhead. */
+	uint8_t wg_mt = (q && q->tot_len >= 1) ? pbuf_get_at(q, 0) : 0;
+	bool wg_ctrl = (wg_mt == 1 || wg_mt == 2 || wg_mt == 3);
+
+	const char *path = "direct-udp";
+	err_t result;
+
+	/* Throughput-fix (2026-05-24): per-packet linearise buffer goes to
+	 * SPIRAM, not internal DRAM. The DERP/magicsock callbacks need a
+	 * contiguous byte array but lwIP's mem_malloc() always lands in
+	 * internal heap. Under sustained ~140 pps to a single peer, the
+	 * 1312-byte alloc/free churn drives internal heap fragmentation;
+	 * with WG + TCP buffers + DNS-relay + httpd already on internal
+	 * DRAM, the alloc fails (ERR_MEM, errno=-1) and the packet drops.
+	 * SPIRAM has 8 MB headroom; per-packet latency is ~10 us extra,
+	 * negligible vs the rest of the WG path. */
+	#define WG_OUT_ALLOC(sz)  heap_caps_malloc((sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+	#define WG_OUT_FREE(p)    heap_caps_free(p)
 
 	// Check if peer has a direct endpoint (non-zero IP and port)
 	// If not, use DERP relay callback if available.
 	// force_derp_output: cellular mode — always route through DERP.
 	if (ip_addr_isany(&peer->ip) || peer->port == 0 || device->force_derp_output) {
+		path = device->force_derp_output ? "DERP-forced" : "DERP";
 		WG_DEBUG("[WG_OUT] No direct endpoint or force_derp, checking DERP\n");
 
 		if (device->derp_output_fn) {
 			// Linearize pbuf chain into contiguous buffer for DERP callback
-			uint8_t *data = (uint8_t *)mem_malloc(q->tot_len);
+			uint8_t *data = (uint8_t *)WG_OUT_ALLOC(q->tot_len);
 			if (data) {
 				pbuf_copy_partial(q, data, q->tot_len, 0);
-				err_t result = device->derp_output_fn(peer->public_key, data, q->tot_len, device->derp_output_ctx);
-				mem_free(data);
-				return result;
+				result = device->derp_output_fn(peer->public_key, data, q->tot_len, device->derp_output_ctx);
+				WG_OUT_FREE(data);
+				goto done;
 			}
-			WG_DEBUG("[WG_OUT] DERP mem_malloc failed!\n");
-		
-			return ERR_MEM;
+			WG_DEBUG("[WG_OUT] DERP heap_caps_malloc(SPIRAM) failed!\n");
+			result = ERR_MEM;
+			goto done;
 		}
 		// No DERP callback and no direct endpoint - can't send
 		WG_DEBUG("[WG_OUT] No DERP callback, returning ERR_RTE\n");
-	
-		return ERR_RTE;
+		result = ERR_RTE;
+		goto done;
 	}
 
 	// In magicsock mode, use external UDP output callback
 	if (device->udp_output_fn) {
+		path = "magicsock";
 		WG_DEBUG("[WG_OUT] Using magicsock callback\n");
-	
+
 		// Linearize pbuf chain and send via callback
-		uint8_t *data = (uint8_t *)mem_malloc(q->tot_len);
+		uint8_t *data = (uint8_t *)WG_OUT_ALLOC(q->tot_len);
 		if (data) {
-			WG_DEBUG("[WG_OUT] mem_malloc OK, copying pbuf\n");
-		
+			WG_DEBUG("[WG_OUT] alloc OK, copying pbuf\n");
 			pbuf_copy_partial(q, data, q->tot_len, 0);
 			// Convert lwIP IP address to network byte order uint32_t
 			uint32_t dest_ip = ip4_addr_get_u32(ip_2_ip4(&peer->ip));
 			WG_DEBUG("[WG_OUT] Calling udp_output_fn, dest_ip=0x%08lx port=%u len=%u\n",
 			       (unsigned long)dest_ip, peer->port, (unsigned)q->tot_len);
-		
-			err_t result = device->udp_output_fn(dest_ip, peer->port, data, q->tot_len, device->udp_output_ctx);
+
+			result = device->udp_output_fn(dest_ip, peer->port, data, q->tot_len, device->udp_output_ctx);
 			WG_DEBUG("[WG_OUT] udp_output_fn returned %d\n", result);
-		
-			mem_free(data);
-			return result;
+			WG_OUT_FREE(data);
+			goto done;
 		}
-		WG_DEBUG("[WG_OUT] mem_malloc FAILED for magicsock!\n");
-	
-		return ERR_MEM;
+		WG_DEBUG("[WG_OUT] heap_caps_malloc(SPIRAM) FAILED for magicsock!\n");
+		result = ERR_MEM;
+		goto done;
 	}
+
+	#undef WG_OUT_ALLOC
+	#undef WG_OUT_FREE
 
 	WG_DEBUG("[WG_OUT] Using direct udp_sendto\n");
 
 	// Send to last known port, not the connect port
 	//TODO: Support DSCP and ECN - lwip requires this set on PCB globally, not per packet
-	return udp_sendto(device->udp_pcb, q, &peer->ip, peer->port);
+	result = udp_sendto(device->udp_pcb, q, &peer->ip, peer->port);
+
+done:
+	/* Throughput-collapse diag: log every send failure with path + endpoint.
+	 * Data-path successes stay quiet to avoid log flood; control packets
+	 * (handshake/cookie) always log their routing decision so the SD recorder
+	 * shows which branch a DERP-only peer takes + whether the DERP cb exists. */
+	if (result != ERR_OK) {
+		ESP_LOGW(TAG, "[WG_OUT_FAIL] peer=%02x%02x%02x%02x mt=%u path=%s ep=%s:%u "
+		       "len=%u derp_fn=%d force_derp=%d err=%d",
+		       peer->public_key[0], peer->public_key[1],
+		       peer->public_key[2], peer->public_key[3],
+		       wg_mt, path,
+		       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
+		       peer->port, (unsigned)(q ? q->tot_len : 0),
+		       device->derp_output_fn ? 1 : 0, device->force_derp_output, (int)result);
+	} else if (wg_ctrl) {
+		WG_HSLOG("[WG_OUT_OK] peer=%02x%02x%02x%02x mt=%u path=%s ep=%s:%u "
+		       "len=%u derp_fn=%d force_derp=%d",
+		       peer->public_key[0], peer->public_key[1],
+		       peer->public_key[2], peer->public_key[3],
+		       wg_mt, path,
+		       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
+		       peer->port, (unsigned)(q ? q->tot_len : 0),
+		       device->derp_output_fn ? 1 : 0, device->force_derp_output);
+	}
+	return result;
 }
 
 static err_t wireguardif_device_output(struct wireguard_device *device, struct pbuf *q, const ip_addr_t *ipaddr, u16_t port) {
@@ -305,8 +399,23 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 				// Check to see if we should rekey
 				if (keypair->sending_counter >= REKEY_AFTER_MESSAGES) {
 					peer->send_handshake = true;
+					WG_HSLOG("[WG_REKEY] peer=%02x%02x%02x%02x reason=counter "
+					       "counter=%lu ep=%s:%u",
+					       peer->public_key[0], peer->public_key[1],
+					       peer->public_key[2], peer->public_key[3],
+					       (unsigned long)keypair->sending_counter,
+					       ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip),
+					       peer->port);
 				} else if (keypair->initiator && wireguard_expired(keypair->keypair_millis, REKEY_AFTER_TIME)) {
 					peer->send_handshake = true;
+					WG_HSLOG("[WG_REKEY] peer=%02x%02x%02x%02x reason=initiator-timer "
+					       "age_ms=%lu counter=%lu ep=%s:%u",
+					       peer->public_key[0], peer->public_key[1],
+					       peer->public_key[2], peer->public_key[3],
+					       (unsigned long)(wireguard_sys_now() - keypair->keypair_millis),
+					       (unsigned long)keypair->sending_counter,
+					       ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip),
+					       peer->port);
 				}
 
 			} else {
@@ -319,7 +428,18 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 			result = ERR_CONN;
 		}
 	} else {
-		// No valid keys!
+		// No valid keys — trigger lazy handshake init for this peer.
+		// Outgoing traffic with no keypair is the wireguard-go SendStagedPackets
+		// trigger: arm `peer->active` so the periodic timer (5s-gated via
+		// should_send_initiation) starts sending handshake initiations.
+		// If we previously gave up after MAX_HANDSHAKE_ATTEMPTS, re-arm so
+		// new traffic gets another 18 attempts. Does NOT touch peer->ip —
+		// the configured endpoint / DERP path stays intact for active sessions.
+		if (!peer->active || peer->handshake_attempts >= MAX_HANDSHAKE_ATTEMPTS) {
+			peer->active = true;
+			peer->handshake_attempts = 0;
+			peer->last_initiation_tx = 0;  // bypass 5s gate for first attempt
+		}
 		result = ERR_CONN;
 	}
 	return result;
@@ -338,33 +458,10 @@ static err_t wireguardif_output(struct netif *netif, struct pbuf *q, const ip4_a
 
 
 	struct wireguard_peer *peer = peer_lookup_by_allowed_ip(device, &addr);
-	if (!peer) {
-		// Fallback: check the source IP → peer mapping table
-		// This handles Tailscale subnet routing where reply dest IP
-		// doesn't match any peer's allowed_ip
-		for (int i = 0; i < WIREGUARD_MAX_PEERS; i++) {
-			struct wireguard_peer *p = &device->peers[i];
-			if (p->valid && p->curr_keypair.valid && ip_addr_cmp(&p->last_source_ip, &addr)) {
-				peer = p;
-				break;
-			}
-		}
-		// Final fallback: most recently active peer
-		if (!peer) {
-			uint32_t best_rx = 0;
-			for (int i = 0; i < WIREGUARD_MAX_PEERS; i++) {
-				struct wireguard_peer *p = &device->peers[i];
-				if (p->valid && p->curr_keypair.valid && p->last_rx > best_rx) {
-					best_rx = p->last_rx;
-					peer = p;
-				}
-			}
-		}
-	}
 	if (peer) {
 		WG_DEBUG("[WG_OUTPUT] Found peer, peer_index=%d, valid=%d\n",
 		       (int)(peer - device->peers), peer->valid);
-
+	
 		return wireguardif_output_to_peer(netif, q, ipaddr, peer);
 	} else {
 		WG_DEBUG("[WG_OUTPUT] NO PEER FOUND for %s! Dumping all peers:\n", ipaddr_ntoa(&addr));
@@ -399,8 +496,8 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 	if (wireguard_process_handshake_response(device, peer, response)) {
 		// Packet is good — identify the peer
 		uint8_t wg_idx = wireguard_peer_index(device, peer);
-		printf("[WG] *** HANDSHAKE COMPLETE! wg_idx=%u key=%02x%02x%02x%02x "
-		       "from=%s:%u ***\n",
+		ESP_LOGW(TAG, "[WG] *** HANDSHAKE COMPLETE! wg_idx=%u key=%02x%02x%02x%02x "
+		       "from=%s:%u ***",
 		       wg_idx,
 		       peer->public_key[0], peer->public_key[1],
 		       peer->public_key[2], peer->public_key[3],
@@ -409,16 +506,17 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		update_peer_addr(peer, addr, port);
 
 		wireguard_start_session(peer, true);
-		printf("[WG] Session started, sending keepalive to %s:%u\n",
+		peer->handshake_attempts = 0;  // session up, reset retry counter
+		ESP_LOGW(TAG, "[WG] Session started, sending keepalive to %s:%u",
 		       ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip), peer->port);
 		wireguardif_send_keepalive(device, peer);
 
 		// Set the IF-UP flag on netif
-		LOCK_TCPIP_CORE(); netif_set_link_up(device->netif); UNLOCK_TCPIP_CORE();
-		printf("[WG] *** WIREGUARD SESSION ESTABLISHED wg_idx=%u ***\n", wg_idx);
+		netif_set_link_up(device->netif);
+		ESP_LOGW(TAG, "[WG] *** WIREGUARD SESSION ESTABLISHED wg_idx=%u ***", wg_idx);
 	} else {
 		// Packet bad
-		printf("[WG] Handshake response INVALID (crypto failed)\n");
+		ESP_LOGW(TAG, "[WG] Handshake response INVALID (crypto failed)");
 	}
 }
 
@@ -463,24 +561,8 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 	uint32_t now;
 	uint16_t header_len = 0xFFFF;
 	uint32_t idx = data_hdr->receiver;
-	WG_DEBUG("[WG_PROC_DATA] idx=%lu data_len=%u\n", (unsigned long)idx, (unsigned)data_len);
 
 	keypair = get_peer_keypair_for_idx(peer, idx);
-
-	if (!keypair) {
-		WG_DEBUG("[WG_DATA] NO keypair for idx=%lu (curr_valid=%d next_valid=%d prev_valid=%d, curr_local=%lu next_local=%lu prev_local=%lu)\n",
-			(unsigned long)idx,
-			peer->curr_keypair.valid, peer->next_keypair.valid, peer->prev_keypair.valid,
-			(unsigned long)peer->curr_keypair.local_index, (unsigned long)peer->next_keypair.local_index, (unsigned long)peer->prev_keypair.local_index);
-		return;
-	}
-
-	if (!keypair->receiving_valid) {
-		WG_DEBUG("[WG_DATA] keypair receiving_valid=FALSE for idx=%lu\n", (unsigned long)idx);
-	}
-	if (wireguard_expired(keypair->keypair_millis, REJECT_AFTER_TIME)) {
-		WG_DEBUG("[WG_DATA] keypair EXPIRED for idx=%lu\n", (unsigned long)idx);
-	}
 
 	if (keypair) {
 		if (
@@ -521,18 +603,13 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					}
 
 					// Make sure that link is reported as up
-					LOCK_TCPIP_CORE(); netif_set_link_up(device->netif); UNLOCK_TCPIP_CORE();
+					netif_set_link_up(device->netif);
 
-					WG_DEBUG("[WG_POST_DECRYPT] tot_len=%u dest_ok_will=%d\n", (unsigned)pbuf->tot_len, (IPH_V((struct ip_hdr *)pbuf->payload)==4));
-				if (pbuf->tot_len > 0) {
+					if (pbuf->tot_len > 0) {
 						//4a. Once the packet payload is decrypted, the interface has a plaintext packet. If this is not an IP packet, it is dropped.
 						iphdr = (struct ip_hdr *)pbuf->payload;
-						WG_DEBUG("[WG_IP_CHECK] ver=%d\n", IPH_V(iphdr));
 						// Check for packet replay / dupes
-						{
-							bool replay_ok = wireguard_check_replay(keypair, nonce);
-							WG_DEBUG("[WG_REPLAY] nonce=%llu result=%d\n", (unsigned long long)nonce, replay_ok);
-						if (replay_ok) {
+						if (wireguard_check_replay(keypair, nonce)) {
 
 							// 4b. Otherwise, WireGuard checks to see if the source IP address of the plaintext inner-packet routes correspondingly in the cryptokey routing table
 							// Also check packet length!
@@ -554,31 +631,19 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 								       ip4_addr3_16(ip_2_ip4(&dest)),
 								       ip4_addr4_16(ip_2_ip4(&dest)),
 								       (unsigned)pbuf->tot_len);
-								// Accept all source IPs - Tailscale handles routing/auth via control plane
-								// The cryptokey routing check is too restrictive for Tailscale's
-								// subnet routing where inner src IP may differ from peer's VPN IP
-								dest_ok = true;
-								header_len = PP_NTOHS(IPH_LEN(iphdr));
-								// Remember source IP → peer mapping for reply routing
-								ip_addr_copy(peer->last_source_ip, src_ip);
-								if (!dest_ok) {
-									WG_DEBUG("[WG_RX_IP] DROPPED: src not in allowed_source_ips. src=%d.%d.%d.%d\n",
-										ip4_addr1_16(ip_2_ip4(&src_ip)), ip4_addr2_16(ip_2_ip4(&src_ip)),
-										ip4_addr3_16(ip_2_ip4(&src_ip)), ip4_addr4_16(ip_2_ip4(&src_ip))); fflush(stdout);
-									for (int dbg_i=0; dbg_i < WIREGUARD_MAX_SRC_IPS; dbg_i++) {
-										if (peer->allowed_source_ips[dbg_i].valid) {
-											printf("  allowed[%d]: %d.%d.%d.%d/%d.%d.%d.%d\n", dbg_i,
-												ip4_addr1_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].ip)),
-												ip4_addr2_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].ip)),
-												ip4_addr3_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].ip)),
-												ip4_addr4_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].ip)),
-												ip4_addr1_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].mask)),
-												ip4_addr2_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].mask)),
-												ip4_addr3_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].mask)),
-												ip4_addr4_16(ip_2_ip4(&peer->allowed_source_ips[dbg_i].mask)));
+								// Check if SOURCE IP matches this peer's allowed IPs
+								for (x=0; x < WIREGUARD_MAX_SRC_IPS; x++) {
+									if (peer->allowed_source_ips[x].valid) {
+										if (IP_ADDR_NETCMP_COMPAT(&src_ip, &peer->allowed_source_ips[x].ip, &peer->allowed_source_ips[x].mask)) {
+											dest_ok = true;
+											header_len = PP_NTOHS(IPH_LEN(iphdr));
+											WG_DEBUG("[WG_RX_IP] Allowed by rule %d (src matches), header_len=%u\n", x, (unsigned)header_len);
+											break;
 										}
 									}
-									fflush(stdout);
+								}
+								if (!dest_ok) {
+									WG_DEBUG("[WG_RX_IP] DROPPED: src IP not in peer's allowed_source_ips\n");
 								}
 							}
 #endif /* LWIP_IPV4 */
@@ -593,15 +658,23 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 
 								// 5. If the plaintext packet has not been dropped, it is inserted into the receive queue of the wg0 interface.
 								if (dest_ok) {
-									// Trim pbuf to actual IP packet size (remove WG padding)
-									if (header_len < pbuf->tot_len) {
-										pbuf_realloc(pbuf, header_len);
+									// Throughput-regression fix (2026-05-24): tcpip_input()
+									// queues to the TCPIP thread (queue alloc + context
+									// switch + sem post per packet), which on the WG RX
+									// hot path caps throughput around ~30 pps and was
+									// the reason post-migration throughput collapsed to
+									// 10-20 KB/s versus the pre-migration 1+ Mbps. The
+									// OLD repo's wireguardif.c (verified at 1 Mbps) used
+									// netif->input directly here. The NULL-deref under
+									// Pi-ping load is a separate ICMP issue; if it
+									// re-surfaces we'll guard ip_data.current_ip4_header
+									// inside icmp_input, not at this layer.
+									WG_DEBUG("[WG_RX_IP] Direct input %u bytes\n", (unsigned)pbuf->tot_len);
+									if (device->netif->input(pbuf, device->netif) == ERR_OK) {
+										pbuf = NULL;
+									} else {
+										WG_DEBUG("[WG_RX_IP] DROPPED: input failed\n");
 									}
-									// Send packet to lwIP via tcpip_input (thread-safe)
-									// ip_input crashes when called from WG task context
-									tcpip_input(pbuf, device->netif);
-									// pbuf is owned by IP layer now
-									pbuf = NULL;
 								} else {
 									WG_DEBUG("[WG_RX_IP] DROPPED: dest_ok=false\n");
 								}
@@ -613,7 +686,6 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 						} else {
 							// This is a duplicate packet / replayed / too far out of order
 						}
-						} /* close replay_ok block */
 					} else {
 						// This was a keep-alive packet
 					}
@@ -671,6 +743,7 @@ static void wireguardif_send_handshake_response(struct wireguard_device *device,
 	if (wireguard_create_handshake_response(device, peer, &packet)) {
 
 		wireguard_start_session(peer, false);
+		peer->handshake_attempts = 0;  // session up, reset retry counter
 
 		// Send this packet out!
 		pbuf = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct message_handshake_response), PBUF_RAM);
@@ -826,16 +899,16 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 	switch (type) {
 		case MESSAGE_HANDSHAKE_INITIATION:
 			msg_initiation = (struct message_handshake_initiation *)data;
-			WG_DEBUG("[WG_RX] Handshake INITIATION from peer, sender_idx=%lu\n",
+			ESP_LOGW(TAG, "[WG_RX] Handshake INITIATION from peer, sender_idx=%lu",
 				(unsigned long)msg_initiation->sender);
 
 			// Check mac1 (and optionally mac2) are correct - note it may internally generate a cookie reply packet
 			if (wireguardif_check_initiation_message(device, msg_initiation, addr, port)) {
-				WG_DEBUG("[WG_RX] Initiation MAC check PASSED\n");
+				ESP_LOGW(TAG, "[WG_RX] Initiation MAC check PASSED");
 
 				peer = wireguard_process_initiation_message(device, msg_initiation);
 				if (peer) {
-					WG_DEBUG("[WG_RX] Initiation processed OK, sending response\n");
+					ESP_LOGW(TAG, "[WG_RX] Initiation processed OK, sending response");
 					// Update the peer location
 					update_peer_addr(peer, addr, port);
 
@@ -850,7 +923,7 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 						saved_port = peer->port;
 						ip_addr_set_any(false, &peer->ip);
 						peer->port = 0;
-						WG_DEBUG("[WG_RX] Sending response via DERP (initiation was relayed)\n");
+						ESP_LOGW(TAG, "[WG_RX] Sending response via DERP (initiation was relayed)");
 					}
 
 					// Send back a handshake response
@@ -862,32 +935,32 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 						peer->port = saved_port;
 					}
 				} else {
-					WG_DEBUG("[WG_RX] Initiation process FAILED (bad keys/timestamp?)\n");
+					ESP_LOGW(TAG, "[WG_RX] Initiation process FAILED (bad keys/timestamp?)");
 				}
 			} else {
-				WG_DEBUG("[WG_RX] Initiation MAC check FAILED\n");
+				ESP_LOGW(TAG, "[WG_RX] Initiation MAC check FAILED");
 			}
 			break;
 
 		case MESSAGE_HANDSHAKE_RESPONSE:
 			msg_response = (struct message_handshake_response *)data;
-			WG_DEBUG("[WG_RX] Handshake RESPONSE! receiver_idx=%lu sender_idx=%lu\n",
+			ESP_LOGW(TAG, "[WG_RX] Handshake RESPONSE! receiver_idx=%lu sender_idx=%lu",
 				(unsigned long)msg_response->receiver, (unsigned long)msg_response->sender);
 
 			// Check mac1 (and optionally mac2) are correct - note it may internally generate a cookie reply packet
 			if (wireguardif_check_response_message(device, msg_response, addr, port)) {
-				WG_DEBUG("[WG_RX] Response MAC check PASSED\n");
+				ESP_LOGW(TAG, "[WG_RX] Response MAC check PASSED");
 
 				peer = peer_lookup_by_handshake(device, msg_response->receiver);
 				if (peer) {
-					WG_DEBUG("[WG_RX] Peer found for handshake, processing response\n");
+					ESP_LOGW(TAG, "[WG_RX] Peer found for handshake, processing response");
 					// Process the handshake response
 					wireguardif_process_response_message(device, peer, msg_response, addr, port);
 				} else {
-					WG_DEBUG("[WG_RX] ERROR: No peer found for receiver_idx=%lu\n", (unsigned long)msg_response->receiver);
+					ESP_LOGW(TAG, "[WG_RX] ERROR: No peer found for receiver_idx=%lu", (unsigned long)msg_response->receiver);
 				}
 			} else {
-				WG_DEBUG("[WG_RX] Response MAC check FAILED\n");
+				ESP_LOGW(TAG, "[WG_RX] Response MAC check FAILED");
 			}
 			break;
 
@@ -936,16 +1009,19 @@ static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_pee
 	pbuf = wireguardif_initiate_handshake(device, peer, &msg, &result);
 	if (pbuf) {
 		result = wireguardif_peer_output(netif, pbuf, peer);
-		WG_DEBUG("[WG_TX] Handshake init sent, result=%d, sender_idx=%lu, to %s:%u\n",
+		WG_HSLOG("[WG_TX] Handshake init sent, result=%d, sender_idx=%lu, to %s:%u",
 			result, (unsigned long)msg.sender,
 			ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip), peer->port);
 		pbuf_free(pbuf);
 		peer->send_handshake = false;
 		peer->last_initiation_tx = wireguard_sys_now();
+		if (peer->handshake_attempts < 0xFF) {
+			peer->handshake_attempts++;
+		}
 		memcpy(peer->handshake_mac1, msg.mac1, WIREGUARD_COOKIE_LEN);
 		peer->handshake_mac1_valid = true;
 	} else {
-		WG_DEBUG("[WG_TX] FAILED to create handshake initiation, result=%d\n", result);
+		ESP_LOGW(TAG, "[WG_TX] FAILED to create handshake initiation, result=%d", result);
 	}
 	return result;
 }
@@ -1060,6 +1136,26 @@ err_t wireguardif_update_endpoint(struct netif *netif, u8_t peer_index, const ip
 	return result;
 }
 
+err_t wireguardif_add_allowed_ip(struct netif *netif, u8_t peer_index,
+                                  const ip_addr_t *ip, const ip_addr_t *mask) {
+	struct wireguard_peer *peer;
+	err_t result = wireguardif_lookup_peer(netif, peer_index, &peer);
+	if (result == ERR_OK) {
+		if (!ip || !mask) return ERR_ARG;
+		result = peer_add_ip(peer, *ip, *mask) ? ERR_OK : ERR_MEM;
+	}
+	return result;
+}
+
+err_t wireguardif_set_upstream_netif(struct netif *wg_netif,
+                                      const struct netif *upstream) {
+	if (!wg_netif || !wg_netif->state) return ERR_ARG;
+	struct wireguard_device *device = (struct wireguard_device *)wg_netif->state;
+	if (!device->udp_pcb) return ERR_VAL;
+	udp_bind_netif(device->udp_pcb, upstream);
+	return ERR_OK;
+}
+
 
 err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t *peer_index) {
 	LWIP_ASSERT("netif != NULL", (netif != NULL));
@@ -1131,7 +1227,8 @@ static bool should_send_initiation(struct wireguard_peer *peer) {
 			result = true;
 		} else if (peer->curr_keypair.valid && !peer->curr_keypair.initiator && wireguard_expired(peer->curr_keypair.keypair_millis, REJECT_AFTER_TIME - peer->keepalive_interval)) {
 			result = true;
-		} else if (!peer->curr_keypair.valid && peer->active) {
+		} else if (!peer->curr_keypair.valid && peer->active &&
+		           peer->handshake_attempts < MAX_HANDSHAKE_ATTEMPTS) {
 			result = true;
 		}
 	}
@@ -1157,6 +1254,18 @@ static bool should_destroy_current_keypair(struct wireguard_peer *peer) {
 			(peer->curr_keypair.sending_counter >= REJECT_AFTER_MESSAGES))
 		) {
 		result = true;
+		/* Throughput-collapse diag: this is the moment encrypted traffic
+		 * actually stops flowing for a peer. Log endpoint + reason. */
+		bool by_age = wireguard_expired(peer->curr_keypair.keypair_millis, REJECT_AFTER_TIME);
+		ESP_LOGW(TAG, "[WG_DESTROY] peer=%02x%02x%02x%02x reason=%s "
+		       "age_ms=%lu counter=%lu ep=%s:%u",
+		       peer->public_key[0], peer->public_key[1],
+		       peer->public_key[2], peer->public_key[3],
+		       by_age ? "age" : "counter",
+		       (unsigned long)(wireguard_sys_now() - peer->curr_keypair.keypair_millis),
+		       (unsigned long)peer->curr_keypair.sending_counter,
+		       ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip),
+		       peer->port);
 	}
 	return result;
 }
@@ -1165,6 +1274,17 @@ static bool should_reset_peer(struct wireguard_peer *peer) {
 	bool result = false;
 	if (peer->curr_keypair.valid && (wireguard_expired(peer->curr_keypair.keypair_millis, REJECT_AFTER_TIME * 3))) {
 		result = true;
+		/* Throughput-collapse diag: peer reset wipes endpoint back to connect_ip
+		 * (often 0.0.0.0 for DERP-only peers). Catch this BEFORE the wipe. */
+		ESP_LOGW(TAG, "[WG_RESET] peer=%02x%02x%02x%02x age_ms=%lu ep=%s:%u "
+		       "-> reverting to connect_ip=%s:%u",
+		       peer->public_key[0], peer->public_key[1],
+		       peer->public_key[2], peer->public_key[3],
+		       (unsigned long)(wireguard_sys_now() - peer->curr_keypair.keypair_millis),
+		       ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip),
+		       peer->port,
+		       ip_addr_isany(&peer->connect_ip) ? "DERP" : ipaddr_ntoa(&peer->connect_ip),
+		       peer->connect_port);
 	}
 	return result;
 }
@@ -1216,7 +1336,7 @@ static void wireguardif_tmr(void *arg) {
 
 	if (!link_up) {
 		// Clear the IF-UP flag on netif
-		LOCK_TCPIP_CORE(); netif_set_link_down(device->netif); UNLOCK_TCPIP_CORE();
+		netif_set_link_down(device->netif);
 	}
 }
 
@@ -1230,9 +1350,25 @@ void wireguardif_periodic(struct netif *netif) {
 
 	// Perform the same work as wireguardif_tmr but from the caller's task context,
 	// avoiding heavy crypto (X25519, ChaCha20-Poly1305) on the lwIP TCPIP thread.
+	//
+	// Throughput fix (2026-05-24): wireguard_start_handshake() costs ~40ms per
+	// peer (X25519 + ChaCha20-Poly1305 + Curve25519 ECDH). With N peers eligible
+	// for retry on the same tick (typical: broken DERP-only peers that haven't
+	// seen an RX yet), the original "send to all" loop blocked the calling task
+	// for N * 40ms ≈ 280ms with 7 peers. Even with exit-node OFF, this is fatal:
+	// the AP→STA NAPT forward path runs on the same task (tiT / ml_wg_mgr),
+	// so a 280ms blockage backlogs the AP RX queue, drops MAC-level frames, and
+	// collapses phone upload throughput mid-test. Throttle to 1 init per tick +
+	// round-robin so each peer still gets a chance within WIREGUARD_MAX_PEERS
+	// ticks.
+	static int s_next_hs_peer_idx = 0;
+	int handshakes_this_tick = 0;
+	const int MAX_HANDSHAKES_PER_TICK = 1;
+
 	bool link_up = false;
 	for (x = 0; x < WIREGUARD_MAX_PEERS; x++) {
-		peer = &device->peers[x];
+		int peer_idx = (s_next_hs_peer_idx + x) % WIREGUARD_MAX_PEERS;
+		peer = &device->peers[peer_idx];
 		if (peer->valid) {
 			if (should_reset_peer(peer)) {
 				keypair_destroy(&peer->next_keypair);
@@ -1248,17 +1384,22 @@ void wireguardif_periodic(struct netif *netif) {
 				wireguardif_send_keepalive(device, peer);
 			}
 			if (should_send_initiation(peer)) {
-				WG_DEBUG("[WG_PERIODIC] Handshake retry wg_idx=%d key=%02x%02x%02x%02x "
-				       "ip=%s:%u connect_ip=%s:%u active=%d send_hs=%d\n",
-				       x,
-				       peer->public_key[0], peer->public_key[1],
-				       peer->public_key[2], peer->public_key[3],
-				       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
-				       peer->port,
-				       ip_addr_isany(&peer->connect_ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->connect_ip),
-				       peer->connect_port,
-				       peer->active, peer->send_handshake);
-				wireguard_start_handshake(device->netif, peer);
+				if (handshakes_this_tick < MAX_HANDSHAKES_PER_TICK) {
+					WG_HSLOG("[WG_PERIODIC] Handshake retry wg_idx=%d key=%02x%02x%02x%02x "
+					       "ip=%s:%u connect_ip=%s:%u active=%d send_hs=%d",
+					       peer_idx,
+					       peer->public_key[0], peer->public_key[1],
+					       peer->public_key[2], peer->public_key[3],
+					       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
+					       peer->port,
+					       ip_addr_isany(&peer->connect_ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->connect_ip),
+					       peer->connect_port,
+					       peer->active, peer->send_handshake);
+					wireguard_start_handshake(device->netif, peer);
+					handshakes_this_tick++;
+					s_next_hs_peer_idx = (peer_idx + 1) % WIREGUARD_MAX_PEERS;
+				}
+				// else: throttled this tick, next tick (round-robin) gets the chance
 			}
 			if ((peer->curr_keypair.valid) || (peer->prev_keypair.valid)) {
 				link_up = true;
@@ -1266,7 +1407,7 @@ void wireguardif_periodic(struct netif *netif) {
 		}
 	}
 	if (!link_up) {
-		LOCK_TCPIP_CORE(); netif_set_link_down(device->netif); UNLOCK_TCPIP_CORE();
+		netif_set_link_down(device->netif);
 	}
 }
 
@@ -1443,7 +1584,7 @@ void wireguardif_force_derp_output(struct netif *netif, bool force) {
 	struct wireguard_device *device = (struct wireguard_device *)netif->state;
 	if (device->valid) {
 		device->force_derp_output = force;
-		printf("[WG] force_derp_output=%d\n", force);
+		ESP_LOGW(TAG, "[WG] force_derp_output=%d", force);
 	}
 }
 

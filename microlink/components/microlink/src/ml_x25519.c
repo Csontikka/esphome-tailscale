@@ -1,7 +1,7 @@
 // Taken from https://sourceforge.net/p/strobe (MIT Licence)
 /**
  * @cond internal
- * @file x25519.c
+ * @file ml_x25519.c
  * @copyright
  *   Copyright (c) 2015-2016 Cryptography Research, Inc.  \n
  *   Released under the MIT License.  See LICENSE.txt for license information.
@@ -11,7 +11,7 @@
 #pragma GCC diagnostic ignored "-Wstringop-overread"
 
 #include <stdint.h>
-#include "x25519.h"
+#include "ml_x25519.h"
 //#include "strobe.h"
 //#include "strobe_config.h"
 // STROBE header replacement
@@ -263,7 +263,7 @@ static void x25519_core(fe xs[5], const uint8_t scalar[X25519_BYTES], const uint
     condswap(x2,x3,swap);
 }
 
-int x25519(uint8_t out[X25519_BYTES], const uint8_t scalar[X25519_BYTES], const uint8_t x1[X25519_BYTES], int clamp) {
+int ml_x25519(uint8_t out[X25519_BYTES], const uint8_t scalar[X25519_BYTES], const uint8_t x1[X25519_BYTES], int clamp) {
     fe xs[5];
     x25519_core(xs,scalar,x1,clamp);
 
@@ -322,7 +322,7 @@ int x25519(uint8_t out[X25519_BYTES], const uint8_t scalar[X25519_BYTES], const 
     else return 0;
 }
 
-const uint8_t X25519_BASE_POINT[X25519_BYTES] = {9};
+const uint8_t ML_X25519_BASE_POINT[X25519_BYTES] = {9};
 
 #if X25519_SUPPORT_VERIFY
 static limb_t x25519_verify_core(
@@ -366,7 +366,7 @@ static limb_t x25519_verify_core(
     return canon(z2) | ~canon(z3);
 }
 
-int x25519_verify_p2 (
+int ml_x25519_verify_p2 (
     const uint8_t response[X25519_BYTES],
     const uint8_t challenge[X25519_BYTES],
     const uint8_t eph[X25519_BYTES],
@@ -374,7 +374,7 @@ int x25519_verify_p2 (
 ) {
     fe xs[7];
     x25519_core(&xs[0],challenge,pub,0);
-    x25519_core(&xs[2],response,X25519_BASE_POINT,0);
+    x25519_core(&xs[2],response,ML_X25519_BASE_POINT,0);
     return x25519_verify_core(&xs[2],xs[0],eph);
 }
 #endif // X25519_SUPPORT_VERIFY
@@ -423,7 +423,7 @@ static void sc_montmul (
     }
 }
 
-void x25519_sign_p2 (
+void ml_x25519_sign_p2 (
     uint8_t response[X25519_BYTES],
     const uint8_t challenge[X25519_BYTES],
     const uint8_t eph_secret[X25519_BYTES],

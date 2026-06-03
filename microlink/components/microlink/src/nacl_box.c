@@ -7,7 +7,7 @@
  */
 
 #include "nacl_box.h"
-#include "x25519.h"
+#include "ml_x25519.h"
 #include <string.h>
 
 /* Debug logging - set to 1 to enable */
@@ -522,14 +522,14 @@ int nacl_box_beforenm(uint8_t *shared_key,
     NACL_LOG_HEX("beforenm sender_sk", sender_sk, 32);
 
     /* X25519 shared secret
-     * The x25519() function with clamp=1 will properly clamp the scalar (private key)
+     * The ml_x25519() function with clamp=1 will properly clamp the scalar (private key)
      * by clearing the 3 lowest bits, clearing the highest bit, and setting bit 254.
      * The public key should NOT be modified - RFC 7748's bit clearing applies to the
      * scalar, not the u-coordinate (public key).
      *
      * NaCl uses clamped scalars for key agreement, so we pass clamp=1.
      */
-    x25519(scalarmult_result, sender_sk, recipient_pk, 1);
+    ml_x25519(scalarmult_result, sender_sk, recipient_pk, 1);
     NACL_LOG_HEX("X25519 shared secret", scalarmult_result, 32);
 
     /* HSalsa20 to derive symmetric key */

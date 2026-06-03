@@ -18,25 +18,37 @@ uint32_t wireguard_sys_now() {
     return sys_now();
 }
 
-void wireguard_tai64n_now(uint8_t *output) {
-    // TAI64N format: 8 bytes seconds + 4 bytes nanoseconds
-    // For simplicity, use Unix epoch time
-    uint64_t now_us = esp_timer_get_time();
-    uint64_t seconds = now_us / 1000000ULL;
-    uint32_t nanoseconds = (now_us % 1000000ULL) * 1000;
+/* WireGuard handshake init carries a TAI64N timestamp the peer compares
+ * against stored greatest_timestamp; anything <= stored is treated as
+ * replay and DROPped. ESP boot uptime restarts from 0 each reboot, so
+ * unless we add a monotonic offset the peer rejects every handshake we
+ * send until its replay-state expires.
+ *
+ * The base offset is supplied by the higher layer (microlink) via
+ * wireguard_set_tai64n_base_seconds() because that layer already owns
+ * NVS access and can decide whether to use SNTP wall clock or a
+ * persisted per-boot counter. */
+static uint64_t s_tai_base_seconds = 0;
 
-    // Log raw uptime before TAI offset (only every ~5s to avoid spam)
-    static uint64_t last_log_s = 0;
-    if (seconds - last_log_s >= 5) {
-        printf("[TAI64N] uptime=%llu s, nano=%lu\n", (unsigned long long)seconds, (unsigned long)nanoseconds);
-        last_log_s = seconds;
+void wireguard_set_tai64n_base_seconds(uint64_t base_seconds) {
+    s_tai_base_seconds = base_seconds;
+}
+
+void wireguard_tai64n_now(uint8_t *output) {
+    uint64_t now_us = esp_timer_get_time();
+    uint64_t seconds = s_tai_base_seconds + (now_us / 1000000ULL);
+    uint32_t nanoseconds = (now_us % 1000000ULL) * 1000;
+    static uint64_t last_log = 0;
+    if (seconds - last_log > 10) {
+        printf("[TAI64N] base=%llu now=%llu\n",
+               (unsigned long long)s_tai_base_seconds,
+               (unsigned long long)seconds);
+        last_log = seconds;
     }
 
-    // TAI64 starts at 1970-01-01 00:00:10 TAI (Unix epoch + 10 seconds)
-    // Add TAI offset: 2^62 + Unix time
+    /* TAI64 base: 2^62 + Unix time (TAI is +10s from UTC at epoch). */
     seconds += 0x400000000000000AULL;
 
-    // Write in big-endian format
     output[0] = (seconds >> 56) & 0xFF;
     output[1] = (seconds >> 48) & 0xFF;
     output[2] = (seconds >> 40) & 0xFF;
@@ -46,8 +58,8 @@ void wireguard_tai64n_now(uint8_t *output) {
     output[6] = (seconds >> 8) & 0xFF;
     output[7] = seconds & 0xFF;
 
-    output[8] = (nanoseconds >> 24) & 0xFF;
-    output[9] = (nanoseconds >> 16) & 0xFF;
+    output[8]  = (nanoseconds >> 24) & 0xFF;
+    output[9]  = (nanoseconds >> 16) & 0xFF;
     output[10] = (nanoseconds >> 8) & 0xFF;
     output[11] = nanoseconds & 0xFF;
 }

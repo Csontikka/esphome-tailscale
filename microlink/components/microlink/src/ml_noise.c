@@ -23,8 +23,8 @@
 
 static const char *TAG = "ml_noise";
 
-/* X25519 from x25519.h */
-#include "x25519.h"
+/* X25519 from ml_x25519.h */
+#include "ml_x25519.h"
 
 /* BLAKE2s from wireguard-lwip (RFC 7693 reference implementation) */
 #include "blake2s.h"
@@ -254,7 +254,7 @@ void ml_noise_init(ml_noise_state_t *state,
     state->local_ephemeral_private[0] &= 248;
     state->local_ephemeral_private[31] &= 127;
     state->local_ephemeral_private[31] |= 64;
-    x25519_base(state->local_ephemeral_public, state->local_ephemeral_private, 1);
+    ml_x25519_base(state->local_ephemeral_public, state->local_ephemeral_private, 1);
 
     state->handshake_complete = false;
 
@@ -285,7 +285,7 @@ esp_err_t ml_noise_write_msg1(ml_noise_state_t *state, uint8_t *out, size_t *out
 
     /* es: DH(ephemeral, remote_static) */
     uint8_t dh_output[32];
-    x25519(dh_output, state->local_ephemeral_private, state->remote_static_public, 1);
+    ml_x25519(dh_output, state->local_ephemeral_private, state->remote_static_public, 1);
 
     uint8_t k[32];
     noise_mix_key(state->ck, k, dh_output);
@@ -299,7 +299,7 @@ esp_err_t ml_noise_write_msg1(ml_noise_state_t *state, uint8_t *out, size_t *out
     pos += 48;
 
     /* ss: DH(static, remote_static) */
-    x25519(dh_output, state->local_static_private, state->remote_static_public, 1);
+    ml_x25519(dh_output, state->local_static_private, state->remote_static_public, 1);
     noise_mix_key(state->ck, k, dh_output);
     memset(dh_output, 0, 32);
 
@@ -341,11 +341,11 @@ esp_err_t ml_noise_read_msg2(ml_noise_state_t *state, const uint8_t *msg, size_t
     offset += 32;
 
     /* ee: DH(our_ephemeral, their_ephemeral) */
-    x25519(dh_output, state->local_ephemeral_private, remote_ephemeral, 1);
+    ml_x25519(dh_output, state->local_ephemeral_private, remote_ephemeral, 1);
     noise_mix_key(state->ck, k, dh_output);
 
     /* se: DH(our_static, their_ephemeral) */
-    x25519(dh_output, state->local_static_private, remote_ephemeral, 1);
+    ml_x25519(dh_output, state->local_static_private, remote_ephemeral, 1);
     noise_mix_key(state->ck, k, dh_output);
     memset(dh_output, 0, 32);
 

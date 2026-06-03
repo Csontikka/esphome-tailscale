@@ -120,6 +120,20 @@ err_t wireguardif_remove_peer(struct netif *netif, u8_t peer_index);
 // Update the "connect" IP of the given peer
 err_t wireguardif_update_endpoint(struct netif *netif, u8_t peer_index, const ip_addr_t *ip, u16_t port);
 
+// Add an additional allowed IP/mask to an existing peer (e.g. 0.0.0.0/0 for
+// exit-node routing). The peer's primary allowed_ip set via wireguardif_add_peer
+// remains intact; this just adds another entry to allowed_source_ips[].
+err_t wireguardif_add_allowed_ip(struct netif *netif, u8_t peer_index,
+                                  const ip_addr_t *ip, const ip_addr_t *mask);
+
+// Pin the WG UDP socket to a specific upstream netif (typically the STA).
+// Without this, when netif_default is flipped to the WG netif (for exit-node
+// routing) the encapsulated UDP packets loop back into the WG tunnel. Calling
+// this with the STA netif makes the encapsulated traffic always leave via
+// the real upstream. Pass NULL to unpin.
+err_t wireguardif_set_upstream_netif(struct netif *wg_netif,
+                                      const struct netif *upstream);
+
 // Try and connect to the given peer
 err_t wireguardif_connect(struct netif *netif, u8_t peer_index);
 

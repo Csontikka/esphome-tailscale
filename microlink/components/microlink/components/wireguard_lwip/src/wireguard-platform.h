@@ -61,6 +61,14 @@ void wireguard_random_bytes(void *bytes, size_t size);
 // The remote end of the Wireguard tunnel will use this value in handshake replay detection
 void wireguard_tai64n_now(uint8_t *output);
 
+// Set the base seconds offset added to esp_timer_get_time() inside
+// wireguard_tai64n_now(). The higher layer must supply a value that is
+// strictly greater than the maximum timestamp emitted in any previous
+// boot (otherwise peers reject our handshakes as replays). Real SNTP
+// wall-clock is ideal; an NVS-persisted per-boot counter is the
+// fallback used by microlink when the clock has not yet synced.
+void wireguard_set_tai64n_base_seconds(uint64_t base_seconds);
+
 // Is the system under load - i.e. should we generate cookie reply message in response to initiation messages
 bool wireguard_is_under_load();
 

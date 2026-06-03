@@ -778,9 +778,17 @@ static esp_err_t handler_restart(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true,\"restarting\":true}");
 
-    /* Delay to let response complete, then restart */
+    /* Delay to let response complete, then restart. Weak ref so this
+     * file still builds in microlink test harnesses that don't link the
+     * router project's note_restart_reason() helper. */
+    extern void note_restart_reason(const char *who)
+        __attribute__((weak));
     vTaskDelay(pdMS_TO_TICKS(500));
-    esp_restart();
+    if (note_restart_reason) {
+        note_restart_reason("microlink POST /api/restart");
+    } else {
+        esp_restart();
+    }
     return ESP_OK;  /* unreachable */
 }
 

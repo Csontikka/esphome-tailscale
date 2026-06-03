@@ -196,15 +196,10 @@ microlink_udp_socket_t *microlink_udp_create(microlink_t *ml, uint16_t local_por
     sock->local_port = sock->pcb->local_port;
     udp_recv(sock->pcb, udp_recv_cb, sock);
 
-    /* Start RX task on Core 1.
-     * Priority 5: same tier as other microlink tasks. Previously this was
-     * configMAX_PRIORITIES - 2 (=23), which preempted ESPHome's loopTask
-     * (priority 1, also pinned to CPU 1) during UDP RX bursts (e.g. WireGuard
-     * handshake storm after peer CMM), starving loopTask long enough to trip
-     * the task watchdog at ~40s uptime. */
+    /* Start RX task on Core 1 */
     sock->rx_running = true;
     if (xTaskCreatePinnedToCore(udp_rx_task, "ml_udp_rx", 4096, sock,
-                                 5, &sock->rx_task, 1) != pdPASS) {
+                                 configMAX_PRIORITIES - 2, &sock->rx_task, 1) != pdPASS) {
         sock->rx_running = false;
         sock->rx_task = NULL;
     }

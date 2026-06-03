@@ -84,7 +84,11 @@ static void route_udp_packet(microlink_t *ml, uint8_t *data, size_t len,
         break;
     case PKT_WIREGUARD:
         if (xQueueSend(ml->wg_rx_queue, &pkt, 0) != pdTRUE) {
-            free(data);
+            static uint32_t wg_rx_drops = 0;
+            if ((++wg_rx_drops & 0x1F) == 1)
+                ESP_LOGW(TAG, "WG-RX(direct) queue full: dropped %lu",
+                         (unsigned long)wg_rx_drops);
+            free(data);  /* Queue full, drop */
         }
         break;
     default:

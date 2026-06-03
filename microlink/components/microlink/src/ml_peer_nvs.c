@@ -29,7 +29,13 @@ static const char *TAG = "ml_peer_nvs";
 #define ML_NVS_MAX_PEERS    64  /* Fallback default */
 #endif
 
-/* Compact peer storage (92 bytes per entry) */
+/* Compact peer storage (118 bytes per entry, v3 schema).
+ * v3 (2026-05-17): hostname_short[7] → hostname_short[32]. The 6-char
+ * truncation in v2 was making the GUI peer table show stub names like
+ * "tailsc" / "dk-tai" / "esp32-" after every reboot until the first
+ * MapResponse came in. 32 bytes fits any Tailscale short hostname (the
+ * first DNS label of an FQDN like "tailscale-105.tailnet.ts.net" is
+ * 13 chars; the longest in practice is ~20). */
 typedef struct __attribute__((packed)) {
     uint32_t vpn_ip;                /* 4 bytes */
     uint8_t public_key[32];         /* 32 bytes */
@@ -40,14 +46,23 @@ typedef struct __attribute__((packed)) {
         uint16_t port;              /* 2 bytes */
     } __attribute__((packed)) endpoints[2]; /* 12 bytes */
     uint8_t endpoint_count;         /* 1 byte */
-    char hostname_short[7];         /* 7 bytes (truncated) */
+    char hostname_short[32];        /* 32 bytes (first DNS label of FQDN) */
     uint16_t lru_counter;           /* 2 bytes — higher = more recently used */
-} peer_nvs_entry_t;                 /* Total: 92 bytes */
+    uint8_t is_exit_node;           /* 1 byte — v2: tailnet exit-node advertisement */
+} peer_nvs_entry_t;                 /* Total: 118 bytes (v3) */
 
-/* In-memory table (loaded from NVS blob) */
+/* In-memory table header: magic + version makes an older blob layout
+ * obvious so we can discard it and request a fresh full peer list from
+ * the control plane on first boot after a schema bump. */
+#define PEER_NVS_MAGIC      0x4D4C5052  /* "MLPR" */
+#define PEER_NVS_VERSION    3
+
 typedef struct __attribute__((packed)) {
+    uint32_t magic;                 /* PEER_NVS_MAGIC */
+    uint16_t version;               /* PEER_NVS_VERSION */
     uint16_t count;                 /* Number of valid entries */
     uint16_t lru_clock;             /* Monotonic LRU counter */
+    uint16_t _pad;                  /* alignment */
     peer_nvs_entry_t entries[ML_NVS_MAX_PEERS];
 } peer_nvs_table_t;
 
@@ -62,16 +77,30 @@ static void load_table(void) {
     }
 
     size_t len = sizeof(peer_nvs_table_t);
-    if (nvs_get_blob(s_nvs, PEER_NVS_BLOB_KEY, s_table, &len) != ESP_OK) {
+    if (nvs_get_blob(s_nvs, PEER_NVS_BLOB_KEY, s_table, &len) != ESP_OK ||
+        s_table->magic != PEER_NVS_MAGIC ||
+        s_table->version != PEER_NVS_VERSION) {
+        if (s_table->magic != 0) {
+            ESP_LOGW(TAG, "Peer cache magic/version mismatch (magic=0x%lx v=%u), discarding",
+                     (unsigned long)s_table->magic, (unsigned)s_table->version);
+        }
         memset(s_table, 0, sizeof(peer_nvs_table_t));
+        s_table->magic = PEER_NVS_MAGIC;
+        s_table->version = PEER_NVS_VERSION;
     }
 }
 
 static esp_err_t flush_table(void) {
     if (!s_table) return ESP_ERR_INVALID_STATE;
 
-    size_t blob_size = sizeof(uint16_t) * 2 +
-                       s_table->count * sizeof(peer_nvs_entry_t);
+    s_table->magic = PEER_NVS_MAGIC;
+    s_table->version = PEER_NVS_VERSION;
+
+    /* Header layout (must match peer_nvs_table_t):
+     *   magic(4) + version(2) + count(2) + lru_clock(2) + _pad(2) = 12 bytes
+     * Trailing entries follow contiguously. */
+    size_t header_size = sizeof(uint32_t) + sizeof(uint16_t) * 4;
+    size_t blob_size = header_size + s_table->count * sizeof(peer_nvs_entry_t);
     esp_err_t err = nvs_set_blob(s_nvs, PEER_NVS_BLOB_KEY, s_table, blob_size);
     if (err == ESP_OK) {
         nvs_commit(s_nvs);
@@ -134,8 +163,18 @@ esp_err_t ml_peer_nvs_save(const ml_peer_t *peer) {
     }
     entry.endpoint_count = stored;
 
-    /* Truncated hostname for display */
-    strncpy(entry.hostname_short, peer->hostname, sizeof(entry.hostname_short) - 1);
+    /* Save the first DNS label only (e.g. "tailscale-105" from
+     * "tailscale-105.tailnet.ts.net") — the GUI already runs the same
+     * stripping for display, and 32 bytes comfortably fits any label. */
+    {
+        const char *dot = strchr(peer->hostname, '.');
+        size_t n = dot ? (size_t)(dot - peer->hostname) : strlen(peer->hostname);
+        if (n > sizeof(entry.hostname_short) - 1) n = sizeof(entry.hostname_short) - 1;
+        memcpy(entry.hostname_short, peer->hostname, n);
+        entry.hostname_short[n] = '\0';
+    }
+
+    entry.is_exit_node = peer->is_exit_node ? 1 : 0;
 
     /* Find existing entry by VPN IP (update) or public key (re-keyed) */
     int slot = -1;
@@ -197,6 +236,7 @@ int ml_peer_nvs_load_all(ml_peer_t *peers, int max_peers) {
         memcpy(p->disco_key, entry->disco_key, 32);
         p->derp_region = entry->derp_region;
         p->active = true;
+        p->online = true;   /* assume reachable until the next MapResponse refines this */
         p->wg_peer_index = -1;
 
         /* Restore hostname (truncated, ensure null-terminated) */
@@ -210,6 +250,8 @@ int ml_peer_nvs_load_all(ml_peer_t *peers, int max_peers) {
             p->endpoints[j].port = entry->endpoints[j].port;
             p->endpoints[j].is_ipv6 = false;
         }
+
+        p->is_exit_node = (entry->is_exit_node != 0);
 
         loaded++;
 

@@ -41,17 +41,56 @@ typedef struct {
      * Set to 0 to disable (all peers treated equally). */
     uint32_t priority_peer_ip;  /* VPN IP in host byte order (e.g., microlink_parse_ip("100.x.y.z")) */
 
+    /* Exit node peer: when set, the matching peer is added with 0.0.0.0/0
+     * in its AllowedIPs slot so wireguard-lwip will deliver internet-bound
+     * packets through that peer's tunnel. The caller is also responsible
+     * for steering the default route into the WG netif (e.g. via
+     * ip4_route_src_hook). 0 = no exit node selected. */
+    uint32_t exit_node_ip;
+
     /* Optional timing overrides (0 = use defaults) */
     uint32_t disco_heartbeat_ms;    /* DISCO keepalive interval (default: 3000) */
     uint32_t stun_interval_ms;      /* STUN re-probe interval (default: 23000) */
     uint32_t ctrl_watchdog_ms;      /* Control plane watchdog timeout (default: 120000) */
 
-    /* Optional custom control plane host (Headscale / Ionscale / self-hosted).
-     * NULL or empty = use the default Tailscale SaaS control plane.
-     * Format: "http(s)://host[:port]" — e.g., "http://192.168.1.100:8080".
-     * If set, this takes priority over any NVS-persisted ctrl_host override. */
+    /* Custom control plane host (NULL or empty = Tailscale SaaS at
+     * controlplane.tailscale.com). Set to a Headscale/Ionscale URL for
+     * self-hosted coordinators. Accepted forms: "host", "host:port",
+     * "http://host", "http://host:port". https:// is rejected.
+     * Internally clipped to 63 chars (see ml->ctrl_host[64]). */
     const char *ctrl_host;
+
+    /* Routes the node advertises to the tailnet (Tailscale's
+     * --advertise-routes equivalent). Newline-separated CIDR list, e.g.
+     * "192.168.4.0/24\n192.168.1.0/24". Each route still requires admin
+     * approval on the control plane before traffic actually flows.
+     * NULL/empty = no routes advertised. Internally clipped to 255 chars. */
+    const char *advertise_routes;
+
+    /* Netcheck override policy.
+     *   netcheck_override_enabled = false → always trust the configured
+     *     default region, even when netcheck measured a faster one.
+     *   netcheck_override_threshold_ms = N → only switch to the measured
+     *     region when its RTT is at least N ms lower than the default
+     *     region's RTT. Avoids ping-ponging on small RTT differences. */
+    bool netcheck_override_enabled;
+    uint32_t netcheck_override_threshold_ms;
+
+    /* User-selected default DERP region. The control plane does NOT compute
+     * its own suggestion (Tailscale Go-style: control plane just echoes
+     * whatever PreferredDERP the client sent). 0 = unset → ML_DERP_REGION
+     * compile-time fallback (Frankfurt). This value is also sent as
+     * MapRequest.Hostinfo.NetInfo.PreferredDERP so peers know our home. */
+    uint16_t preferred_derp_region;
 } microlink_config_t;
+
+/* Single CIDR route entry — used for subnet-router advertisements. */
+typedef struct {
+    uint32_t network;    /* network address, host byte order */
+    uint8_t  prefix_len; /* CIDR prefix length, 0–32 */
+} microlink_route_t;
+
+#define MICROLINK_MAX_PEER_ROUTES 8
 
 /* Peer info (read-only snapshot) */
 typedef struct {
@@ -60,6 +99,17 @@ typedef struct {
     uint8_t public_key[32];
     bool online;
     bool direct_path;           /* true if communicating via direct UDP */
+    bool is_exit_node;          /* true if peer advertises 0.0.0.0/0 in AllowedIPs */
+    uint16_t derp_region;       /* peer's home DERP region id (from Node.HomeDERP /
+                                 * legacy DERP "127.3.3.40:N"); 0 = unknown. When
+                                 * direct_path is false this is the region the peer
+                                 * is relayed through. Name via
+                                 * microlink_get_derp_region_name(). */
+    /* Subnet routes the peer advertises (parsed from AllowedIPs,
+     * excluding the peer's own /32 in CGNAT and 0.0.0.0/0 — those
+     * are reported separately). */
+    microlink_route_t subnet_routes[MICROLINK_MAX_PEER_ROUTES];
+    uint8_t subnet_route_count;
 } microlink_peer_info_t;
 
 /* Connection state */
@@ -111,24 +161,6 @@ microlink_t *microlink_init(const microlink_config_t *config);
 esp_err_t microlink_start(microlink_t *ml);
 
 /**
- * @brief Rebind to a new network interface without destroying the session
- * @param ml Handle
- * @return ESP_OK on success
- *
- * Use this when switching between WiFi and cellular (or vice versa).
- * Closes and reopens all sockets on the new interface while preserving:
- * - WireGuard peer state and crypto keys
- * - Peer table and DISCO discovery state
- * - VPN IP assignment
- * - Task state machines
- *
- * The coord and DERP connections will reconnect automatically (~5-10s).
- * Much faster than stop/destroy/init/start which requires full re-registration
- * and MapResponse re-download.
- */
-esp_err_t microlink_rebind(microlink_t *ml);
-
-/**
  * @brief Stop and disconnect from Tailscale
  * @param ml Handle
  * @return ESP_OK on success
@@ -136,6 +168,18 @@ esp_err_t microlink_rebind(microlink_t *ml);
  * Gracefully shuts down all tasks and closes connections.
  */
 esp_err_t microlink_stop(microlink_t *ml);
+
+/**
+ * @brief Soft-reconnect: force the coordination + DERP links to reconnect.
+ * @param ml Handle
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if idle
+ *
+ * Signals the coord task (FORCE_RECONNECT) and DERP I/O task to tear down
+ * and re-establish their connections. Peers and WireGuard state are
+ * preserved. Lighter than a full microlink_stop()/microlink_start() cycle;
+ * used as the first self-healing step before escalating to a full restart.
+ */
+esp_err_t microlink_rebind(microlink_t *ml);
 
 /**
  * @brief Destroy MicroLink instance and free all resources
@@ -160,6 +204,30 @@ bool microlink_is_connected(const microlink_t *ml);
 uint32_t microlink_get_vpn_ip(const microlink_t *ml);
 
 /**
+ * @brief Get the node/auth key expiry time.
+ * @return Expiry timestamp (Unix epoch seconds), or 0 if unknown / no expiry.
+ */
+int64_t microlink_get_key_expiry(const microlink_t *ml);
+
+/**
+ * @brief Pin the magicsock WG output PCB to a specific upstream netif.
+ *
+ * Required for exit-node mode: when netif_default is flipped to the WG
+ * netif so AP-client internet traffic routes into the tunnel, the
+ * encapsulated WG UDP packets must NOT loop back through that default
+ * route. Calling this with the upstream (e.g. STA) netif forces the
+ * raw output PCB to send only via that netif.
+ *
+ * Pass NULL to unpin (restores normal routing-table behaviour).
+ *
+ * @param ml Handle
+ * @param upstream The lwIP netif to bind to (pass NULL to clear)
+ * @return ESP_OK on success
+ */
+struct netif;
+esp_err_t microlink_pin_wg_output_netif(microlink_t *ml, struct netif *upstream);
+
+/**
  * @brief Get number of known peers
  */
 int microlink_get_peer_count(const microlink_t *ml);
@@ -173,37 +241,79 @@ int microlink_get_peer_count(const microlink_t *ml);
  */
 esp_err_t microlink_get_peer_info(const microlink_t *ml, int index, microlink_peer_info_t *info);
 
-/**
- * @brief Force all outbound WireGuard packets through the DERP relay callback
- *
- * When enabled, the WG netif skips any cached direct UDP endpoint and routes
- * every outbound packet through the DERP TLS channel. Use this as a fallback
- * when the device is behind a carrier-grade NAT (mobile hotspot, CGNAT) where
- * direct UDP to a peer's public endpoint is silently dropped but DERP still
- * works. Safe to call before microlink_init has built the WG netif — the
- * intent is stored and applied at netif creation.
- */
-void microlink_force_derp_output(microlink_t *ml, bool force);
+/* Compact runtime diagnostic snapshot for status/web UI use. */
+typedef struct {
+    microlink_state_t state;
+    bool     connected;
+    uint32_t vpn_ip;            /* tailnet CGNAT IP, host byte order */
+    uint32_t wan_public_ip;     /* STUN-discovered, host byte order, 0 if unknown */
+    uint16_t derp_home_region;     /* currently active DERP region (netcheck may have overridden the default) */
+    uint16_t derp_region_default;  /* configured default region (user pick from /tailscale form, or ML_DERP_REGION fallback) */
+    int      peer_count;
+    int      peer_online;       /* peers currently marked active */
+    uint32_t uptime_sec;        /* seconds in ML_STATE_CONNECTED; 0 if not connected */
+    /* Last RegisterResponse User block — surfaces auth_key / stale-
+     * node-key failures that Headscale wraps in a 200-OK. Semantics:
+     *   -1 = no RegisterResponse parsed yet this boot,
+     *    0 = identity is bad (auth_key invalid or node-key unknown),
+     *   >0 = registered as a real user, name in register_user_name. */
+    int      register_user_id;
+    char     register_user_name[48];
 
-/**
- * @brief Read the current force_derp_output flag
- * @return true if all outbound WG packets are being routed via DERP
- */
-bool microlink_is_force_derp_output(const microlink_t *ml);
+    /* True = every keypair loaded from NVS at boot, so the device has
+     * a stable node-key. False = at least one was freshly generated
+     * (factory-reset or first boot). The pubkey prefix is 16 hex chars
+     * of the WG public key — enough to identify the node visually in
+     * the Headscale node list without dumping the full key. */
+    bool     identity_persistent;
+    char     identity_pubkey_prefix[17];
+} microlink_diag_t;
 
-/**
- * @brief Get auth key / node key expiry time (Unix epoch seconds)
- * @param ml Handle
- * @return Expiry timestamp (Unix seconds), or 0 if unknown / no expiry set
- */
-int64_t microlink_get_key_expiry(const microlink_t *ml);
+esp_err_t microlink_get_diag(const microlink_t *ml, microlink_diag_t *out);
 
-/**
- * @brief Check if auth key / node key is expired
- * @param ml Handle
- * @return true if control plane reported Node.Expired == true
- */
-bool microlink_is_key_expired(const microlink_t *ml);
+/* Liveness probe for the DERP I/O task: ml_get_time_ms() captured at the
+ * top of that task's most recent loop iteration. Subtract from a monotonic
+ * ms clock to get the "heartbeat age" — a value that climbs without bound
+ * when the task wedges in a socket call, which is the signature of the
+ * silent control-plane stall. Returns 0 if ml is NULL or it hasn't looped
+ * yet. */
+uint64_t microlink_get_last_derp_heartbeat_ms(const microlink_t *ml);
+
+/* ml_get_time_ms() of the last frame RECEIVED from the control plane on the
+ * long-poll stream (PONG / server-PING / SETTINGS / keepalive / MapResponse).
+ * Unlike the coord watchdog's last_activity_ms this is NOT reset by our own
+ * 5 s PING send, so now - this value (coord_age) climbs as soon as the control
+ * plane goes silent — even while the device still reports CONNECTED. This is
+ * the signal for the silent control-plane wedge. Returns 0 if ml is NULL or
+ * not yet connected. */
+uint64_t microlink_get_ctrl_last_rx_ms(const microlink_t *ml);
+
+/* eTaskState snapshot of the four internal worker tasks. Each field holds
+ * the FreeRTOS eTaskState (eRunning/eReady/eBlocked/eSuspended/eDeleted)
+ * cast to int, or -1 if the task handle has not been created yet. */
+typedef struct {
+    int net_io;
+    int derp_tx;
+    int coord;
+    int wg_mgr;
+} microlink_task_states_t;
+void microlink_get_task_states(const microlink_t *ml, microlink_task_states_t *out);
+
+/* DERP region RTT snapshot, one entry per region that responded to the
+ * last netcheck. rtt_ms = 0 means the region was probed but timed out. */
+typedef struct {
+    uint16_t region_id;
+    uint16_t rtt_ms;
+} microlink_derp_rtt_t;
+
+/* Fills `out` with up to `max` entries, ordered by ascending RTT. Returns
+ * the number written (0 if no netcheck has run yet). */
+int microlink_get_derp_rtts(const microlink_t *ml, microlink_derp_rtt_t *out, int max);
+
+/* Returns the human-readable city name for a DERP region (from the
+ * MapResponse DERPMap.RegionName field). Returns NULL if region_id is
+ * unknown — the caller should fall through to a "?" placeholder. */
+const char *microlink_get_derp_region_name(const microlink_t *ml, uint16_t region_id);
 
 /**
  * @brief Send UDP data to a peer by VPN IP

@@ -19,7 +19,6 @@
 #include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_netif_ppp.h"
-#include "lwip/ip6_addr.h"
 #include "esp_event.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
@@ -52,7 +51,6 @@ static const char *TAG = "ml_cell";
 #define PPP_CONNECT_FAIL    BIT2
 #define PPP_CHAP_FAIL_BIT   BIT3
 #define PPP_CLOSED_BIT      BIT4   /* ppp_close() completed (PPPERR_USER callback fired) */
-#define PPP_GOT_IP6_BIT     BIT5
 
 static struct {
     ml_cellular_config_t config;
@@ -504,20 +502,6 @@ static void ppp_ip_event_handler(void *arg, esp_event_base_t event_base,
         s_cell.info.data_connected = true;
         s_cell.state = ML_CELL_STATE_PPP_CONNECTED;
         xEventGroupSetBits(s_cell.ppp_events, PPP_GOT_IP_BIT);
-    } else if (event_id == IP_EVENT_GOT_IP6) {
-        ip_event_got_ip6_t *event = (ip_event_got_ip6_t *)event_data;
-        if (event->esp_netif != s_cell.ppp_netif) return;
-
-        /* Skip link-local (fe80::) — wait for global address */
-        if (ip6_addr_islinklocal(&event->ip6_info.ip)) {
-            ESP_LOGI(TAG, "PPP got link-local IPv6 (waiting for global)");
-            return;
-        }
-
-        ESP_LOGI(TAG, "PPP got IPv6: " IPV6STR, IPV62STR(event->ip6_info.ip));
-        s_cell.info.data_connected = true;
-        s_cell.state = ML_CELL_STATE_PPP_CONNECTED;
-        xEventGroupSetBits(s_cell.ppp_events, PPP_GOT_IP6_BIT);
     } else if (event_id == IP_EVENT_PPP_LOST_IP) {
         ESP_LOGW(TAG, "PPP lost IP");
         s_cell.info.data_connected = false;
@@ -755,13 +739,12 @@ static esp_err_t ppp_setup_and_dial(void)
     /* Wait for IP assignment, CHAP failure, or timeout */
     EventBits_t bits = xEventGroupWaitBits(
         s_cell.ppp_events,
-        PPP_GOT_IP_BIT | PPP_GOT_IP6_BIT | PPP_CONNECT_FAIL | PPP_CHAP_FAIL_BIT,
+        PPP_GOT_IP_BIT | PPP_CONNECT_FAIL | PPP_CHAP_FAIL_BIT,
         pdFALSE, pdFALSE,
         pdMS_TO_TICKS(PPP_CONNECT_TIMEOUT_MS));
 
-    if (bits & (PPP_GOT_IP_BIT | PPP_GOT_IP6_BIT)) {
-        ESP_LOGI(TAG, "PPP data connection established (%s)",
-                 (bits & PPP_GOT_IP_BIT) ? "IPv4" : "IPv6");
+    if (bits & PPP_GOT_IP_BIT) {
+        ESP_LOGI(TAG, "PPP data connection established");
         return ESP_OK;
     }
 
