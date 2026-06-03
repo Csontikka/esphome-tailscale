@@ -326,7 +326,7 @@ a{color:var(--acc);text-decoration:none}.refresh{float:right;color:var(--mut);fo
 thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:hover{color:var(--fg)}
 </style></head><body><div class="wrap">
 <a href="" onclick="location.reload();return false" class="refresh">↻ refresh</a>
-<h1>esphome-tailscale telemetry</h1>
+<h1 style="color:#ffcc33">esphome-tailscale TELEMETRY</h1>
 <div class="sub">Generated ${esc(nowBp)} <strong>Europe/Budapest</strong> · <a href="/v1/stats">JSON API</a></div>
 <div class="cards">${cards}</div>
 <div class="grid">
