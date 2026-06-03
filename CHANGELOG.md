@@ -10,6 +10,11 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-03
+
+### Changed
+- **Telemetry admin dashboard:** the Recent activity and Top devices tables now have client-side per-column filters, click-a-header sorting, and a row-limit selector (50–1000) with a "showing X of Y" counter (`telemetry/worker.js`). Backend/admin only — **no device firmware change** from 0.4.0.
+
 ## [0.4.0] — 2026-06-03
 
 ### Added
