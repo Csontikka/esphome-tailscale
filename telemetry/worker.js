@@ -323,7 +323,6 @@ export default {
 .topbar h1{justify-self:start}
 .topbar .sub{justify-self:center;background:var(--panel);border:1px solid var(--border);border-radius:99px;padding:6px 14px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .topbar .refresh{justify-self:end}
-.topbar .hero{justify-self:start;height:40px;width:auto;display:block}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px}
 .card-v{font-size:32px;font-weight:600;color:var(--acc)}.card-l{color:var(--mut);font-size:13px;margin-top:4px}
@@ -347,7 +346,7 @@ a{color:var(--acc);text-decoration:none}.refresh{color:var(--mut);font-size:12px
 thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:hover{color:var(--fg)}
 </style></head><body><div class="wrap">
 <div class="topbar">
-<img class="hero" src="https://raw.githubusercontent.com/Csontikka/esphome-tailscale/main/docs/images/hero.png" alt="esphome-tailscale">
+<h1 style="color:#ffcc33">esphome-tailscale</h1>
 <div class="sub">Generated ${esc(nowBp)} <strong>Europe/Budapest</strong> · <a href="/v1/stats">JSON API</a></div>
 <a href="" onclick="location.reload();return false" class="refresh">↻ refresh</a>
 </div>
