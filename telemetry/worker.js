@@ -318,7 +318,11 @@ export default {
 <style>
 :root{--bg:#0f1115;--panel:#171a21;--border:#262b36;--fg:#e7ecf3;--mut:#8a93a3;--acc:#4ea1ff;--ok:#3ddc97;--warn:#ffb547;--err:#ff5a5f}
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--fg)}
-.wrap{max-width:1400px;margin:0 auto;padding:24px}h1{margin:0 0 4px;font-size:22px}.sub{color:var(--mut);font-size:13px;margin-bottom:24px}
+.wrap{max-width:1400px;margin:0 auto;padding:0 24px 24px}h1{margin:0;font-size:22px}.sub{color:var(--mut);font-size:13px}
+.topbar{position:sticky;top:0;z-index:30;background:var(--bg);border-bottom:1px solid var(--border);display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;padding:16px 0;margin-bottom:24px}
+.topbar h1{justify-self:start}
+.topbar .sub{justify-self:center;background:var(--panel);border:1px solid var(--border);border-radius:99px;padding:6px 14px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar .refresh{justify-self:end}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px}
 .card-v{font-size:32px;font-weight:600;color:var(--acc)}.card-l{color:var(--mut);font-size:13px;margin-top:4px}
@@ -332,7 +336,7 @@ th{color:var(--mut);font-weight:500;font-size:12px;text-transform:uppercase}tr:l
 .tag-boot{background:rgba(78,161,255,.15);color:var(--acc)}.tag-heartbeat{background:rgba(61,220,151,.12);color:var(--ok)}
 .scroll{overflow-x:auto}tr.row-crash{background:rgba(255,90,95,.07)}tr.row-crash td.crash-sig{color:var(--err);font-weight:600}
 .rr{font-size:11px;font-weight:600}.rr-ok{color:var(--ok)}.rr-err{color:var(--err)}.rr-warn{color:var(--warn)}.rr-mut{color:var(--mut)}
-a{color:var(--acc);text-decoration:none}.refresh{float:right;color:var(--mut);font-size:12px}.foot{color:var(--mut);font-size:11px;text-align:center;margin-top:24px}
+a{color:var(--acc);text-decoration:none}.refresh{color:var(--mut);font-size:12px;white-space:nowrap}.foot{color:var(--mut);font-size:11px;text-align:center;margin-top:24px}
 .rec-count{font-size:12px;font-weight:400;color:var(--mut);margin-left:8px;text-transform:none;letter-spacing:0}
 .rec-controls{padding:8px 16px;color:var(--mut);font-size:12px;border-bottom:1px solid var(--border)}
 .rec-controls select{background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font:12px inherit}
@@ -341,9 +345,11 @@ a{color:var(--acc);text-decoration:none}.refresh{float:right;color:var(--mut);fo
 .filter-row input::placeholder{color:var(--mut);opacity:.5}
 thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:hover{color:var(--fg)}
 </style></head><body><div class="wrap">
-<a href="" onclick="location.reload();return false" class="refresh">↻ refresh</a>
+<div class="topbar">
 <h1 style="color:#ffcc33">esphome-tailscale</h1>
 <div class="sub">Generated ${esc(nowBp)} <strong>Europe/Budapest</strong> · <a href="/v1/stats">JSON API</a></div>
+<a href="" onclick="location.reload();return false" class="refresh">↻ refresh</a>
+</div>
 <div class="cards">${cards}</div>
 <div class="grid">
   <div class="panel"><h2>Events by type + reset</h2><table><thead><tr><th>Type</th><th>Reset</th><th class="num">Count</th></tr></thead><tbody>${typeRows || '<tr><td colspan=3>no data</td></tr>'}</tbody></table></div>
