@@ -269,7 +269,7 @@ export default {
           return head + ' (\n  ' + cols.map(c => c.replace(/\s+/g, ' ').trim()).filter(Boolean).join(',\n  ') + '\n)';
         };
         const rrLabel = (rr) => {
-          const m = {0:['UNKNOWN','mut'],1:['POWERON','ok'],2:['EXT','ok'],3:['SW','mut'],4:['PANIC','err'],5:['INT_WDT','err'],6:['TASK_WDT','err'],7:['WDT','err'],8:['DEEPSLEEP','mut'],9:['BROWNOUT','err'],10:['SDIO','mut']};
+          const m = {0:['UNKNOWN','mut'],1:['POWERON','ok'],2:['EXT','ok'],3:['SW','mut'],4:['PANIC','err'],5:['INT_WDT','err'],6:['TASK_WDT','err'],7:['WDT','err'],8:['DEEPSLEEP','mut'],9:['BROWNOUT','err'],10:['SDIO','mut'],11:['USB','mut'],12:['JTAG','mut'],13:['EFUSE','err'],14:['PWR_GLITCH','err'],15:['CPU_LOCKUP','err']};
           return rr == null ? ['-','mut'] : (m[rr] || [String(rr),'mut']);
         };
         const nowBp = fmtTs(Math.floor(Date.now() / 1000));
