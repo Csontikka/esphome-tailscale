@@ -327,6 +327,7 @@ export default {
 .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px}
 .card-v{font-size:32px;font-weight:600;color:var(--acc)}.card-l{color:var(--mut);font-size:13px;margin-top:4px}
 .grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:24px}@media(max-width:1000px){.grid{grid-template-columns:1fr 1fr}}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:24px}@media(max-width:1000px){.grid-3{grid-template-columns:1fr 1fr}}
 .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden}
 .panel h2{margin:0;padding:12px 16px;font-size:12px;font-weight:600;border-bottom:1px solid var(--border);color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
 table{width:100%;border-collapse:collapse}th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);font-size:13px}
@@ -351,8 +352,8 @@ thead tr:first-child th{cursor:pointer;user-select:none}thead tr:first-child th:
 <a href="" onclick="location.reload();return false" class="refresh">↻ refresh</a>
 </div>
 <div class="cards">${cards}</div>
-<div class="grid">
-  <div class="panel"><h2>Events by type + version + reset</h2><table><thead><tr><th>Type</th><th>Version</th><th>Reset</th><th class="num">Count</th><th>Last seen</th></tr></thead><tbody>${typeRows || '<tr><td colspan=5>no data</td></tr>'}</tbody></table></div>
+<div class="panel" style="margin-bottom:24px"><h2>Events by type + version + reset</h2><table><thead><tr><th>Type</th><th>Version</th><th>Reset</th><th class="num">Count</th><th>Last seen</th></tr></thead><tbody>${typeRows || '<tr><td colspan=5>no data</td></tr>'}</tbody></table></div>
+<div class="grid-3">
   <div class="panel"><h2>Versions</h2><table><thead><tr><th>Version</th><th class="num">Devices</th></tr></thead><tbody>${verRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
   <div class="panel"><h2>Countries</h2><table><thead><tr><th>Country</th><th class="num">Devices</th></tr></thead><tbody>${ctryRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
   <div class="panel"><h2>PSRAM</h2><table><thead><tr><th>PSRAM</th><th class="num">Devices</th></tr></thead><tbody>${psrRows || '<tr><td colspan=2>no data</td></tr>'}</tbody></table></div>
