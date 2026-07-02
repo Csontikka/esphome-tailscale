@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-02
+
 ### Added
 - **`login_server` now accepts `https://` URLs** — Headscale (or any Tailscale-compatible coordinator) behind TLS works, including reverse-proxy setups that force HTTPS with a 308 redirect ([#23](https://github.com/Csontikka/esphome-tailscale/issues/23)). The control-plane connection (`/key` fetch, Noise upgrade, register, long-poll) runs inside an `esp_tls` session validated against the ESP-IDF public-CA certificate bundle, so Let's Encrypt and other public-CA certs work out of the box; **self-signed / private-CA certs are not supported yet**. Based on [@jonny190](https://github.com/jonny190)'s work in [#18](https://github.com/Csontikka/esphome-tailscale/pull/18), re-ported onto the current vendored microlink line with fixes (deterministic `errno` mapping for the TLS read path, TLS-buffer peek before `select()`, scheme-flag reset in URL parsing).
 
