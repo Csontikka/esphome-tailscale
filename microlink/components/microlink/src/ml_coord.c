@@ -1953,9 +1953,168 @@ static int add_endpoints_to_json(microlink_t *ml, cJSON *root) {
     return count;
 }
 
-static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
+/* Parse the DERPMap (regions + nodes) out of a MapResponse and refresh the
+ * netcheck / home-region selection. Shared by the non-streaming initial
+ * fetch and the streaming long-poll path — Headscale >= 0.26 no longer
+ * serves a netmap on non-streaming MapRequests, so the first (full)
+ * MapResponse, DERPMap included, arrives on the long-poll stream instead.
+ * No-op when the JSON carries no DERPMap. Returns true when at least one
+ * region was parsed. */
+static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
+    cJSON *derp_map = cJSON_GetObjectItem(map_json, "DERPMap");
+    if (!derp_map) return false;
+    cJSON *regions = cJSON_GetObjectItem(derp_map, "Regions");
+    if (!regions) return false;
+
+    ml->derp_region_count = 0;
+    cJSON *region_obj;
+    cJSON_ArrayForEach(region_obj, regions) {
+        if (ml->derp_region_count >= ML_MAX_DERP_REGIONS) break;
+        ml_derp_region_t *r = &ml->derp_regions[ml->derp_region_count];
+        memset(r, 0, sizeof(*r));
+
+        cJSON *rid = cJSON_GetObjectItem(region_obj, "RegionID");
+        if (rid) r->region_id = (uint16_t)rid->valuedouble;
+
+        cJSON *rcode = cJSON_GetObjectItem(region_obj, "RegionCode");
+        if (rcode && rcode->valuestring) {
+            strncpy(r->code, rcode->valuestring, sizeof(r->code) - 1);
+        }
+
+        cJSON *rname = cJSON_GetObjectItem(region_obj, "RegionName");
+        if (rname && rname->valuestring) {
+            strncpy(r->name, rname->valuestring, sizeof(r->name) - 1);
+        }
+
+        cJSON *avoid = cJSON_GetObjectItem(region_obj, "Avoid");
+        if (avoid && cJSON_IsTrue(avoid)) r->avoid = true;
+
+        /* Parse nodes */
+        cJSON *nodes = cJSON_GetObjectItem(region_obj, "Nodes");
+        if (nodes) {
+            cJSON *node_obj;
+            cJSON_ArrayForEach(node_obj, nodes) {
+                if (r->node_count >= ML_MAX_DERP_NODES) break;
+                ml_derp_node_t *n = &r->nodes[r->node_count];
+                memset(n, 0, sizeof(*n));
+
+                cJSON *hn = cJSON_GetObjectItem(node_obj, "HostName");
+                if (hn && hn->valuestring) {
+                    strncpy(n->hostname, hn->valuestring, sizeof(n->hostname) - 1);
+                }
+
+                cJSON *ip4 = cJSON_GetObjectItem(node_obj, "IPv4");
+                if (ip4 && ip4->valuestring) {
+                    strncpy(n->ipv4, ip4->valuestring, sizeof(n->ipv4) - 1);
+                }
+
+                cJSON *ip6 = cJSON_GetObjectItem(node_obj, "IPv6");
+                if (ip6 && ip6->valuestring) {
+                    strncpy(n->ipv6, ip6->valuestring, sizeof(n->ipv6) - 1);
+                }
+
+                cJSON *sp = cJSON_GetObjectItem(node_obj, "STUNPort");
+                if (sp) n->stun_port = (uint16_t)sp->valuedouble;
+
+                cJSON *dp = cJSON_GetObjectItem(node_obj, "DERPPort");
+                if (dp) n->derp_port = (uint16_t)dp->valuedouble;
+
+                cJSON *so = cJSON_GetObjectItem(node_obj, "STUNOnly");
+                if (so && cJSON_IsTrue(so)) n->stun_only = true;
+
+                r->node_count++;
+            }
+        }
+
+        ESP_LOGI(TAG, "  DERP region %d (%s): %d nodes%s",
+                 r->region_id, r->code, r->node_count,
+                 r->avoid ? " [avoid]" : "");
+        for (int ni = 0; ni < r->node_count; ni++) {
+            ESP_LOGI(TAG, "    node: %s (v4=%s v6=%s stun=%d derp=%d%s)",
+                     r->nodes[ni].hostname,
+                     r->nodes[ni].ipv4[0] ? r->nodes[ni].ipv4 : "-",
+                     r->nodes[ni].ipv6[0] ? r->nodes[ni].ipv6 : "-",
+                     r->nodes[ni].stun_port ? r->nodes[ni].stun_port : 3478,
+                     r->nodes[ni].derp_port ? r->nodes[ni].derp_port : 443,
+                     r->nodes[ni].stun_only ? " stun-only" : "");
+        }
+
+        ml->derp_region_count++;
+    }
+    ESP_LOGI(TAG, "DERPMap: parsed %d regions", ml->derp_region_count);
+
+    /* Netcheck: measure RTT to every known DERP region via STUN.
+     * Whether we then override the control-plane HomeDERP is gated
+     * by two policy knobs (microlink_config_t):
+     *   netcheck_override_enabled  — kill switch
+     *   netcheck_override_threshold_ms — hysteresis: only switch
+     *       when the measured region beats the control-plane region
+     *       by at least N ms (avoids ping-ponging between regions
+     *       with near-identical latency, e.g. Frankfurt 100 ms vs
+     *       Sao Paulo 86 ms with a 50 ms threshold = stay on FFM). */
+    if (ml->derp_region_count > 0) {
+        uint16_t measured = ml_netcheck_pick_best_derp(ml);
+        uint16_t cp = ml->derp_region_default;
+
+        if (!ml->config.netcheck_override_enabled) {
+            ESP_LOGI(TAG, "Netcheck override disabled by config — using control-plane DERP %u", cp);
+        } else if (measured > 0 && measured != cp) {
+            /* Look up RTTs from ml->derp_rtt_ms (aligned with derp_regions[]). */
+            uint16_t measured_rtt = 0, cp_rtt = 0;
+            for (int r = 0; r < ml->derp_region_count; r++) {
+                if (ml->derp_regions[r].region_id == measured) measured_rtt = ml->derp_rtt_ms[r];
+                if (ml->derp_regions[r].region_id == cp) cp_rtt = ml->derp_rtt_ms[r];
+            }
+            bool cp_has_rtt = (cp != 0 && cp_rtt > 0);
+            int32_t improvement = cp_has_rtt ? (int32_t)cp_rtt - (int32_t)measured_rtt : INT32_MAX;
+            int32_t thresh = (int32_t)ml->config.netcheck_override_threshold_ms;
+            if (improvement >= thresh) {
+                ESP_LOGI(TAG, "Netcheck override: %u (%ums) -> %u (%ums), improvement %ldms >= %ldms threshold",
+                         cp, cp_rtt, measured, measured_rtt, (long)improvement, (long)thresh);
+                ml->derp_home_region = measured;
+            } else {
+                ESP_LOGI(TAG, "Netcheck found %u (%ums) faster than CP %u (%ums) but improvement %ldms < %ldms threshold — staying on CP",
+                         measured, measured_rtt, cp, cp_rtt, (long)improvement, (long)thresh);
+            }
+        } else if (measured > 0 && measured == cp) {
+            ml->derp_home_region = measured;
+        }
+    }
+
+    /* Set the *default* region (= user pick from /tailscale form, or
+     * ML_DERP_REGION compile-time fallback if the user hasn't picked
+     * one). The control plane itself never sends an independent
+     * suggestion (it just echoes our PreferredDERP), so we drive this
+     * locally. The GUI uses derp_region_default to render the "default"
+     * marker; the active home region (derp_home_region) is what
+     * netcheck may have overridden. */
+    uint16_t cfg_pref = ml->config.preferred_derp_region;
+    ml->derp_region_default = cfg_pref ? cfg_pref : ML_DERP_REGION;
+
+    if (ml->derp_home_region == 0) {
+        ml->derp_home_region = ml->derp_region_default;
+        ESP_LOGI(TAG, "Home DERP region: %d (boot default)", ml->derp_home_region);
+    }
+
+    return ml->derp_region_count > 0;
+}
+
+/* Fetch + parse one full MapResponse (Node, peers, DERPMap).
+ *
+ * send_request=true: send a non-streaming (Stream=false) MapRequest on H2
+ * stream 3 first — the classic initial fetch (Tailscale SaaS answers it
+ * with a full netmap).
+ * send_request=false: send nothing; read the MapResponse already in flight
+ * on the just-opened long-poll stream — Headscale >= 0.26 answers the
+ * non-streaming fetch with an empty body and only delivers the netmap on
+ * the stream (see the empty-response branch below).
+ *
+ * Returns 0 = netmap parsed, 1 = empty response (send_request mode only),
+ * -1 = error. */
+static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_request) {
     int64_t t_map_start = esp_timer_get_time();
 
+    if (send_request) {
     /* Build MapRequest JSON */
     cJSON *root = cJSON_CreateObject();
     if (!root) return -1;
@@ -2042,9 +2201,12 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
         return -1;
     }
     free(h2_buf);
+    }  /* if (send_request) */
 
     int64_t t_map_sent = esp_timer_get_time();
-    ESP_LOGI(TAG, "[TIMING] MapRequest send: %lld ms", (t_map_sent - t_map_start) / 1000);
+    if (send_request) {
+        ESP_LOGI(TAG, "[TIMING] MapRequest send: %lld ms", (t_map_sent - t_map_start) / 1000);
+    }
 
     /* Read MapResponse - accumulate ALL decrypted Noise frames first, then parse H2.
      * This is critical because a single H2 frame can span multiple Noise frames
@@ -2098,6 +2260,9 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
          * DATA frame type=0x00, END_STREAM flag=0x01.
          * We scan from the start each time since frames may span Noise boundaries. */
         size_t scan_pos = 0;
+        size_t scan_data_total = 0;
+        const uint8_t *first_data_payload = NULL;
+        size_t first_data_len = 0;
         while (scan_pos + 9 <= h2_total) {
             uint32_t f_len = (h2_recv[scan_pos] << 16) | (h2_recv[scan_pos + 1] << 8) | h2_recv[scan_pos + 2];
             uint8_t f_type = h2_recv[scan_pos + 3];
@@ -2109,7 +2274,47 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
                 /* DATA frame with END_STREAM — response is complete */
                 got_end_stream = true;
             }
+            if (f_type == 0x01 && (f_flags & 0x01)) {
+                /* HEADERS with END_STREAM — bodyless response (e.g. the empty
+                 * answer Headscale >= 0.26 gives a non-streaming MapRequest).
+                 * Don't sit out the 60s recv timeout waiting for DATA that
+                 * will never come. */
+                got_end_stream = true;
+            }
+            if (f_type == 0x00 && f_len > 0) {
+                if (!first_data_payload) {
+                    first_data_payload = h2_recv + scan_pos + 9;
+                    first_data_len = f_len;
+                }
+                scan_data_total += f_len;
+            }
             scan_pos += 9 + f_len;
+        }
+
+        /* Streaming responses (send_request=false) never carry END_STREAM —
+         * the message boundary is the 4-byte length prefix in front of the
+         * JSON body. Stop reading once the prefixed message is complete.
+         * The prefix endianness is not spelled out anywhere authoritative
+         * for this stack, so accept whichever plausible reading is larger;
+         * an implausible prefix simply falls back to the recv timeout. */
+        if (!send_request && !got_end_stream &&
+            first_data_payload && first_data_len >= 4) {
+            uint32_t le = (uint32_t)first_data_payload[0] |
+                          ((uint32_t)first_data_payload[1] << 8) |
+                          ((uint32_t)first_data_payload[2] << 16) |
+                          ((uint32_t)first_data_payload[3] << 24);
+            uint32_t be = ((uint32_t)first_data_payload[0] << 24) |
+                          ((uint32_t)first_data_payload[1] << 16) |
+                          ((uint32_t)first_data_payload[2] << 8) |
+                           (uint32_t)first_data_payload[3];
+            uint32_t need = 0;
+            if (le >= 2 && le < ML_JSON_BUFFER_SIZE) need = le;
+            if (be >= 2 && be < ML_JSON_BUFFER_SIZE && be > need) need = be;
+            if (need > 0 && scan_data_total >= (size_t)need + 4) {
+                ESP_LOGI(TAG, "Streamed MapResponse complete (%lu+4 bytes) after %d Noise frames",
+                         (unsigned long)need, read_count + 1);
+                got_end_stream = true;
+            }
         }
 
         if (got_end_stream) {
@@ -2192,9 +2397,16 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
     }
 
     if (json_total == 0) {
-        ESP_LOGW(TAG, "Empty MapResponse");
+        /* Headscale >= 0.26 processes a non-streaming (Stream=false)
+         * MapRequest as a bare endpoint update and returns NO body — the
+         * full netmap is only ever delivered on the streaming long-poll.
+         * (Tailscale SaaS still answers with a full map here.)  Not an
+         * error: report "empty" so the caller can skip straight to the
+         * long-poll and take the initial netmap from there. */
+        ESP_LOGW(TAG, "Empty MapResponse — control plane defers the netmap "
+                      "to the streaming long-poll (Headscale >= 0.26)");
         free(resp_buf);
-        return -1;
+        return send_request ? 1 : -1;
     }
 
     ESP_LOGI(TAG, "MapResponse JSON: %d bytes", (int)json_total);
@@ -2228,6 +2440,24 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
         parse_len -= json_offset;
     } else if (json_offset < 0) {
         ESP_LOGW(TAG, "No '{' found in first 8 bytes of MapResponse!");
+    }
+
+    /* Stream mode: the buffer may already hold the START of the next
+     * length-prefixed message behind the first one — clamp parsing to the
+     * first message, or cJSON chokes on the trailing bytes. */
+    if (!send_request && json_offset == 4 && json_total > 4) {
+        uint32_t le = (uint32_t)resp_buf[0] | ((uint32_t)resp_buf[1] << 8) |
+                      ((uint32_t)resp_buf[2] << 16) | ((uint32_t)resp_buf[3] << 24);
+        uint32_t be = ((uint32_t)resp_buf[0] << 24) | ((uint32_t)resp_buf[1] << 16) |
+                      ((uint32_t)resp_buf[2] << 8) | (uint32_t)resp_buf[3];
+        uint32_t body = 0;
+        if (le >= 2 && le <= parse_len) body = le;
+        else if (be >= 2 && be <= parse_len) body = be;
+        if (body > 0 && body < parse_len) {
+            ESP_LOGI(TAG, "Clamping streamed MapResponse parse to first message (%lu of %lu bytes)",
+                     (unsigned long)body, (unsigned long)parse_len);
+            parse_len = body;
+        }
     }
 
     /* Null-terminate */
@@ -2357,142 +2587,10 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
     /* Parse peers */
     parse_peers_from_map_response(ml, map_json);
 
-    /* Extract DERPMap if present — parse all regions and nodes */
-    cJSON *derp_map = cJSON_GetObjectItem(map_json, "DERPMap");
-    if (derp_map) {
-        cJSON *regions = cJSON_GetObjectItem(derp_map, "Regions");
-        if (regions) {
-            ml->derp_region_count = 0;
-            cJSON *region_obj;
-            cJSON_ArrayForEach(region_obj, regions) {
-                if (ml->derp_region_count >= ML_MAX_DERP_REGIONS) break;
-                ml_derp_region_t *r = &ml->derp_regions[ml->derp_region_count];
-                memset(r, 0, sizeof(*r));
-
-                cJSON *rid = cJSON_GetObjectItem(region_obj, "RegionID");
-                if (rid) r->region_id = (uint16_t)rid->valuedouble;
-
-                cJSON *rcode = cJSON_GetObjectItem(region_obj, "RegionCode");
-                if (rcode && rcode->valuestring) {
-                    strncpy(r->code, rcode->valuestring, sizeof(r->code) - 1);
-                }
-
-                cJSON *rname = cJSON_GetObjectItem(region_obj, "RegionName");
-                if (rname && rname->valuestring) {
-                    strncpy(r->name, rname->valuestring, sizeof(r->name) - 1);
-                }
-
-                cJSON *avoid = cJSON_GetObjectItem(region_obj, "Avoid");
-                if (avoid && cJSON_IsTrue(avoid)) r->avoid = true;
-
-                /* Parse nodes */
-                cJSON *nodes = cJSON_GetObjectItem(region_obj, "Nodes");
-                if (nodes) {
-                    cJSON *node_obj;
-                    cJSON_ArrayForEach(node_obj, nodes) {
-                        if (r->node_count >= ML_MAX_DERP_NODES) break;
-                        ml_derp_node_t *n = &r->nodes[r->node_count];
-                        memset(n, 0, sizeof(*n));
-
-                        cJSON *hn = cJSON_GetObjectItem(node_obj, "HostName");
-                        if (hn && hn->valuestring) {
-                            strncpy(n->hostname, hn->valuestring, sizeof(n->hostname) - 1);
-                        }
-
-                        cJSON *ip4 = cJSON_GetObjectItem(node_obj, "IPv4");
-                        if (ip4 && ip4->valuestring) {
-                            strncpy(n->ipv4, ip4->valuestring, sizeof(n->ipv4) - 1);
-                        }
-
-                        cJSON *ip6 = cJSON_GetObjectItem(node_obj, "IPv6");
-                        if (ip6 && ip6->valuestring) {
-                            strncpy(n->ipv6, ip6->valuestring, sizeof(n->ipv6) - 1);
-                        }
-
-                        cJSON *sp = cJSON_GetObjectItem(node_obj, "STUNPort");
-                        if (sp) n->stun_port = (uint16_t)sp->valuedouble;
-
-                        cJSON *dp = cJSON_GetObjectItem(node_obj, "DERPPort");
-                        if (dp) n->derp_port = (uint16_t)dp->valuedouble;
-
-                        cJSON *so = cJSON_GetObjectItem(node_obj, "STUNOnly");
-                        if (so && cJSON_IsTrue(so)) n->stun_only = true;
-
-                        r->node_count++;
-                    }
-                }
-
-                ESP_LOGI(TAG, "  DERP region %d (%s): %d nodes%s",
-                         r->region_id, r->code, r->node_count,
-                         r->avoid ? " [avoid]" : "");
-                for (int ni = 0; ni < r->node_count; ni++) {
-                    ESP_LOGI(TAG, "    node: %s (v4=%s v6=%s stun=%d derp=%d%s)",
-                             r->nodes[ni].hostname,
-                             r->nodes[ni].ipv4[0] ? r->nodes[ni].ipv4 : "-",
-                             r->nodes[ni].ipv6[0] ? r->nodes[ni].ipv6 : "-",
-                             r->nodes[ni].stun_port ? r->nodes[ni].stun_port : 3478,
-                             r->nodes[ni].derp_port ? r->nodes[ni].derp_port : 443,
-                             r->nodes[ni].stun_only ? " stun-only" : "");
-                }
-
-                ml->derp_region_count++;
-            }
-            ESP_LOGI(TAG, "DERPMap: parsed %d regions", ml->derp_region_count);
-
-            /* Netcheck: measure RTT to every known DERP region via STUN.
-             * Whether we then override the control-plane HomeDERP is gated
-             * by two policy knobs (microlink_config_t):
-             *   netcheck_override_enabled  — kill switch
-             *   netcheck_override_threshold_ms — hysteresis: only switch
-             *       when the measured region beats the control-plane region
-             *       by at least N ms (avoids ping-ponging between regions
-             *       with near-identical latency, e.g. Frankfurt 100 ms vs
-             *       Sao Paulo 86 ms with a 50 ms threshold = stay on FFM). */
-            if (ml->derp_region_count > 0) {
-                uint16_t measured = ml_netcheck_pick_best_derp(ml);
-                uint16_t cp = ml->derp_region_default;
-
-                if (!ml->config.netcheck_override_enabled) {
-                    ESP_LOGI(TAG, "Netcheck override disabled by config — using control-plane DERP %u", cp);
-                } else if (measured > 0 && measured != cp) {
-                    /* Look up RTTs from ml->derp_rtt_ms (aligned with derp_regions[]). */
-                    uint16_t measured_rtt = 0, cp_rtt = 0;
-                    for (int r = 0; r < ml->derp_region_count; r++) {
-                        if (ml->derp_regions[r].region_id == measured) measured_rtt = ml->derp_rtt_ms[r];
-                        if (ml->derp_regions[r].region_id == cp) cp_rtt = ml->derp_rtt_ms[r];
-                    }
-                    bool cp_has_rtt = (cp != 0 && cp_rtt > 0);
-                    int32_t improvement = cp_has_rtt ? (int32_t)cp_rtt - (int32_t)measured_rtt : INT32_MAX;
-                    int32_t thresh = (int32_t)ml->config.netcheck_override_threshold_ms;
-                    if (improvement >= thresh) {
-                        ESP_LOGI(TAG, "Netcheck override: %u (%ums) -> %u (%ums), improvement %ldms >= %ldms threshold",
-                                 cp, cp_rtt, measured, measured_rtt, (long)improvement, (long)thresh);
-                        ml->derp_home_region = measured;
-                    } else {
-                        ESP_LOGI(TAG, "Netcheck found %u (%ums) faster than CP %u (%ums) but improvement %ldms < %ldms threshold — staying on CP",
-                                 measured, measured_rtt, cp, cp_rtt, (long)improvement, (long)thresh);
-                    }
-                } else if (measured > 0 && measured == cp) {
-                    ml->derp_home_region = measured;
-                }
-            }
-
-            /* Set the *default* region (= user pick from /tailscale form, or
-             * ML_DERP_REGION compile-time fallback if the user hasn't picked
-             * one). The control plane itself never sends an independent
-             * suggestion (it just echoes our PreferredDERP), so we drive this
-             * locally. The GUI uses derp_region_default to render the "default"
-             * marker; the active home region (derp_home_region) is what
-             * netcheck may have overridden. */
-            uint16_t cfg_pref = ml->config.preferred_derp_region;
-            ml->derp_region_default = cfg_pref ? cfg_pref : ML_DERP_REGION;
-
-            if (ml->derp_home_region == 0) {
-                ml->derp_home_region = ml->derp_region_default;
-                ESP_LOGI(TAG, "Home DERP region: %d (boot default)", ml->derp_home_region);
-            }
-        }
-    }
+    /* Parse the DERPMap (regions + nodes) and refresh the netcheck /
+     * home-region policy — logic shared with the streaming long-poll path
+     * (Headscale >= 0.26 delivers the initial netmap there instead). */
+    parse_derp_map_from_response(ml, map_json);
 
     cJSON_Delete(map_json);
     free(resp_buf);
@@ -2872,6 +2970,16 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
 
         /* Parse peer updates */
         parse_peers_from_map_response(ml, update_json);
+
+        /* The DERPMap can arrive on the stream too — Headscale >= 0.26
+         * delivers the ENTIRE initial netmap here (the non-streaming fetch
+         * returns an empty body, see do_map_exchange).  Parse it and kick
+         * the DERP I/O task if it has not connected yet. */
+        if (parse_derp_map_from_response(ml, update_json) && !ml->derp.connected) {
+            ESP_LOGI(TAG, "DERPMap arrived via long-poll — signaling DERP connect");
+            xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
+        }
+
         cJSON_Delete(update_json);
     }
 
@@ -3017,27 +3125,52 @@ void ml_coord_task(void *arg) {
 
         case COORD_FETCH_PEERS:
             ESP_LOGI(TAG, "Fetching peers...");
-            if (do_fetch_peers(ml, &noise) < 0) {
-                ESP_LOGW(TAG, "MapRequest failed, will retry");
-                ml_conn_close(ml);
-                state = COORD_RECONNECTING;
-                break;
-            }
+            {
+                bool lp_started = false;
+                int fp_rc = do_map_exchange(ml, &noise, true);
+                if (fp_rc < 0) {
+                    ESP_LOGW(TAG, "MapRequest failed, will retry");
+                    ml_conn_close(ml);
+                    state = COORD_RECONNECTING;
+                    break;
+                }
 
-            xEventGroupSetBits(ml->events, ML_EVT_COORD_REGISTERED);
+                xEventGroupSetBits(ml->events, ML_EVT_COORD_REGISTERED);
 
-            /* Signal DERP I/O task to connect (connection now owned by I/O task) */
-            if (!ml->derp.connected) {
-                xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
-                /* Wait for DERP to connect (up to 15s) before continuing */
-                ESP_LOGI(TAG, "Waiting for DERP I/O task to connect...");
-                xEventGroupWaitBits(ml->events, ML_EVT_DERP_CONNECTED,
-                                    pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
-            }
+                if (fp_rc == 1) {
+                    /* Empty fetch response (Headscale >= 0.26): the initial
+                     * netmap — Node, peers AND DERPMap — is only delivered
+                     * on the streaming long-poll.  Open the stream now and
+                     * consume the initial full map from it with the same
+                     * robust reader/parser the classic fetch uses. */
+                    ESP_LOGI(TAG, "Reading initial netmap from the long-poll stream");
+                    if (do_start_long_poll(ml, &noise) < 0) {
+                        ESP_LOGW(TAG, "Failed to start long-poll");
+                        ml_conn_close(ml);
+                        state = COORD_RECONNECTING;
+                        break;
+                    }
+                    lp_started = true;
+                    if (do_map_exchange(ml, &noise, false) < 0) {
+                        /* Not fatal: poll_map_update may still pick up
+                         * (small) updates from the stream. */
+                        ESP_LOGW(TAG, "No initial netmap on the long-poll stream yet");
+                    }
+                }
 
-            /* Start streaming long-poll for incremental updates */
-            if (do_start_long_poll(ml, &noise) < 0) {
-                ESP_LOGW(TAG, "Failed to start long-poll (non-fatal)");
+                if (!ml->derp.connected) {
+                    /* Signal DERP I/O task to connect (connection now owned by I/O task) */
+                    xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
+                    /* Wait for DERP to connect (up to 15s) before continuing */
+                    ESP_LOGI(TAG, "Waiting for DERP I/O task to connect...");
+                    xEventGroupWaitBits(ml->events, ML_EVT_DERP_CONNECTED,
+                                        pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
+                }
+
+                /* Start streaming long-poll for incremental updates */
+                if (!lp_started && do_start_long_poll(ml, &noise) < 0) {
+                    ESP_LOGW(TAG, "Failed to start long-poll (non-fatal)");
+                }
             }
 
             /* Send initial endpoint update if STUN already completed.
