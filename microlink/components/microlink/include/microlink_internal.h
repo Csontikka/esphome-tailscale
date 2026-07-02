@@ -27,6 +27,10 @@
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 #include "esp_heap_caps.h"
+/* Forward-declare esp_tls_t so we can hold a pointer without pulling in
+ * the full esp_tls.h header (esp-tls REQUIRES added in CMakeLists). */
+struct esp_tls;
+typedef struct esp_tls esp_tls_t;
 
 #ifdef CONFIG_ML_ZERO_COPY_WG
 #include "lwip/udp.h"
@@ -473,6 +477,8 @@ struct microlink_s {
 
     /* Coordination socket (owned exclusively by coord task) */
     int coord_sock;
+    bool       use_tls;                 /* true if login_server URL is https:// */
+    esp_tls_t *coord_tls;               /* NULL when use_tls is false */
     uint32_t h2_next_stream_id;         /* Next H2 stream ID for endpoint updates (odd, starts at 7) */
 
     /* WireGuard netif (owned exclusively by wg_mgr task) */
@@ -576,6 +582,22 @@ struct microlink_s {
      * Set from NVS at boot for Headscale/Ionscale/custom coordinators,
      * or from microlink_config_t.ctrl_host when supplied directly. */
     char ctrl_host[64];
+
+    /* Parsed host and port from ctrl_host (filled lazily by do_tcp_connect).
+     * ctrl_host_parsed is the bare hostname/IP, ctrl_port_str the port as
+     * decimal string (default "80" http / "443" https), ctrl_host_hdr is the
+     * value to use in HTTP "Host:" / HTTP/2 ":authority" (host, plus ":port"
+     * iff non-default). */
+    char ctrl_host_parsed[64];
+    char ctrl_port_str[8];
+    char ctrl_host_hdr[72];
+
+    /* Noise server static public key fetched from the custom control plane
+     * via GET /key?v=88. Valid only when ctrl_noise_pubkey_valid is true;
+     * otherwise ml_noise_init falls back to the hardcoded Tailscale SaaS
+     * server key. */
+    uint8_t ctrl_noise_pubkey[32];
+    bool ctrl_noise_pubkey_valid;
 
     /* Subnet routes to advertise on register (Hostinfo.RoutableIPs).
      * Newline-separated CIDR string copied from microlink_config_t.advertise_routes.

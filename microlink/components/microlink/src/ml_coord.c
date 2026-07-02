@@ -32,6 +32,8 @@
 #include "lwip/netdb.h"
 #include "lwip/netif.h"
 #include "mbedtls/base64.h"
+#include "esp_tls.h"
+#include "esp_crt_bundle.h"
 #include <string.h>
 #include <errno.h>
 
@@ -63,6 +65,13 @@ void ml_bind_sock_to_upstream(microlink_t *ml, int fd)
 
 /* Effective control plane host: NVS override or compiled default */
 #define CTRL_HOST(ml) ((ml)->ctrl_host[0] ? (ml)->ctrl_host : ML_CTRL_HOST)
+
+/* Value for HTTP "Host:" / HTTP/2 ":authority" headers: the parsed bare host
+ * (plus ":port" iff non-default), filled by do_tcp_connect. Falls back to the
+ * compiled default before the first connect. Never the raw ctrl_host URL —
+ * that may still carry a scheme prefix ("https://...") which is invalid in a
+ * Host header. */
+#define CTRL_HOST_HDR(ml) ((ml)->ctrl_host_hdr[0] ? (ml)->ctrl_host_hdr : ML_CTRL_HOST)
 
 /* Build a JSON string array from ml->advertise_routes (newline-separated
  * CIDR list, e.g. "192.168.4.0/24\n192.168.1.0/24"). Empty / NULL input
@@ -132,17 +141,413 @@ static int hex_to_bytes(const char *hex, uint8_t *bytes, size_t max_len) {
 }
 
 /* ============================================================================
+ * Control-plane URL parsing + Noise server key fetch (Headscale / custom)
+ *
+ * Custom control planes (Headscale / Ionscale / dev coordinators) are set via
+ * login_server as "host", "host:port", "http://host[:port]" or
+ * "https://host[:port]".  The Tailscale SaaS default needs neither parsing
+ * (bare compiled-in host, port 80) nor a key fetch (hardcoded server key).
+ * ========================================================================== */
+
+/* Parse "[http[s]://]host[:port]" into bare host and decimal port string.
+ * Default port is "80" for http:// / bare hosts and "443" for https://.
+ * If use_tls_out is non-NULL it is set to true iff the scheme is https://.
+ * Returns 0 on success, -1 on error. */
+static int parse_host_port(const char *in,
+                           char *host_out, size_t host_sz,
+                           char *port_out, size_t port_sz,
+                           bool *use_tls_out) {
+    if (!in || !host_out || !port_out || host_sz == 0 || port_sz == 0) return -1;
+
+    /* Reset the TLS flag up front so the outcome never depends on the
+     * caller's prior state (a stale true from an earlier https:// parse). */
+    if (use_tls_out) *use_tls_out = false;
+
+    const char *p = in;
+    const char *default_port = "80";
+
+    /* Strip scheme */
+    if (strncasecmp(p, "http://", 7) == 0) {
+        p += 7;
+    } else if (strncasecmp(p, "https://", 8) == 0) {
+        if (use_tls_out) *use_tls_out = true;
+        p += 8;
+        /* Default port for https is 443; explicit ":port" in the URL overrides. */
+        default_port = "443";
+    }
+
+    /* Find ':' for port separator, stop at '/' (path) or end */
+    const char *colon = NULL;
+    const char *slash = NULL;
+    for (const char *q = p; *q; q++) {
+        if (*q == ':' && !colon) colon = q;
+        if (*q == '/') { slash = q; break; }
+    }
+
+    const char *host_end = slash ? slash : (p + strlen(p));
+    if (colon && colon < host_end) host_end = colon;
+
+    size_t host_len = (size_t)(host_end - p);
+    if (host_len == 0 || host_len >= host_sz) {
+        ESP_LOGE(TAG, "parse_host_port: host too long or empty in '%s'", in);
+        return -1;
+    }
+    memcpy(host_out, p, host_len);
+    host_out[host_len] = '\0';
+
+    /* Port */
+    if (colon && colon < (slash ? slash : (p + strlen(p)))) {
+        const char *port_start = colon + 1;
+        const char *port_end = slash ? slash : (port_start + strlen(port_start));
+        size_t port_len = (size_t)(port_end - port_start);
+        if (port_len == 0 || port_len >= port_sz) {
+            ESP_LOGE(TAG, "parse_host_port: port too long or empty in '%s'", in);
+            return -1;
+        }
+        memcpy(port_out, port_start, port_len);
+        port_out[port_len] = '\0';
+        /* Validate digits */
+        for (size_t i = 0; i < port_len; i++) {
+            if (port_out[i] < '0' || port_out[i] > '9') {
+                ESP_LOGE(TAG, "parse_host_port: non-numeric port in '%s'", in);
+                return -1;
+            }
+        }
+    } else {
+        strncpy(port_out, default_port, port_sz - 1);
+        port_out[port_sz - 1] = '\0';
+    }
+    return 0;
+}
+
+/* Decode one hex char; returns 0-15 or -1. */
+static int hex_nybble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+/* Hex-decode exactly 64 chars into 32 bytes. Returns 0 on success. */
+static int hex_to_bytes32(const char *hex, uint8_t out[32]) {
+    for (int i = 0; i < 32; i++) {
+        int hi = hex_nybble(hex[i * 2]);
+        int lo = hex_nybble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return 0;
+}
+
+/* Parse the /key?v=88 HTTP response (already NUL-terminated).
+ * Skips HTTP headers, handles chunked transfer encoding, decodes the JSON
+ * "publicKey":"mkey:<64 hex>" field, and hex-decodes the 32-byte Noise pubkey
+ * into pubkey_out.  Returns 0 on success, -1 on parse/decode error. */
+static int parse_pubkey_response(const char *resp, uint8_t pubkey_out[32]) {
+    /* Find header/body boundary */
+    const char *body = strstr(resp, "\r\n\r\n");
+    if (!body) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: no header terminator in response");
+        return -1;
+    }
+    body += 4;
+
+    /* Handle chunked transfer encoding: skip the first hex length line. */
+    if (strstr(resp, "Transfer-Encoding: chunked") ||
+        strstr(resp, "transfer-encoding: chunked") ||
+        strstr(resp, "TRANSFER-ENCODING: CHUNKED")) {
+        const char *chunk_end = strstr(body, "\r\n");
+        if (!chunk_end) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: chunked body malformed");
+            return -1;
+        }
+        body = chunk_end + 2;
+    }
+
+    /* Parse JSON: {"legacyPublicKey":"mkey:...","publicKey":"mkey:<64 hex>"} */
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: JSON parse failed; body='%s'", body);
+        return -1;
+    }
+    cJSON *pk = cJSON_GetObjectItem(root, "publicKey");
+    if (!cJSON_IsString(pk) || !pk->valuestring) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: no publicKey field in JSON");
+        cJSON_Delete(root);
+        return -1;
+    }
+    const char *s = pk->valuestring;
+    /* Strip "mkey:" prefix if present */
+    if (strncmp(s, "mkey:", 5) == 0) s += 5;
+    if (strlen(s) != 64) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: publicKey wrong length (%d, want 64)", (int)strlen(s));
+        cJSON_Delete(root);
+        return -1;
+    }
+    if (hex_to_bytes32(s, pubkey_out) != 0) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: hex decode failed");
+        cJSON_Delete(root);
+        return -1;
+    }
+    cJSON_Delete(root);
+    return 0;
+}
+
+/* Open a short-lived connection to host:port (plain TCP or TLS per
+ * ml->use_tls), GET /key?v=88, parse the JSON body, extract publicKey,
+ * hex-decode into ml->ctrl_noise_pubkey.  Returns 0 on success, -1 on any
+ * failure.  Closes its own socket / destroys its own transient TLS handle. */
+static int fetch_server_pubkey(microlink_t *ml, const char *host, const char *port) {
+    /* ------------------------------------------------------------------ */
+    /* TLS branch: use esp_tls for a short-lived, transient connection.    */
+    /* The handle is local — never stored in ml.                           */
+    /* ------------------------------------------------------------------ */
+    if (ml->use_tls) {
+        ESP_LOGI(TAG, "Fetching Noise server pubkey from https://%s:%s/key?v=88", host, port);
+
+        const esp_tls_cfg_t cfg = {
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms        = 10000,
+            .non_block         = false,
+        };
+        esp_tls_t *tls = esp_tls_init();
+        if (!tls) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: esp_tls_init failed");
+            return -1;
+        }
+        int port_i = atoi(port);
+        int rc_tls = esp_tls_conn_new_sync(host, (int)strlen(host), port_i, &cfg, tls);
+        if (rc_tls != 1) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: TLS handshake failed (rc=%d)", rc_tls);
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+
+        /* Build the HTTP GET request; use ctrl_host_hdr for the Host header
+         * (matches what the coord connection uses), falling back to host. */
+        const char *host_hdr = (ml->ctrl_host_hdr[0]) ? ml->ctrl_host_hdr : host;
+        char req[256];
+        int req_len = snprintf(req, sizeof(req),
+            "GET /key?v=88 HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "User-Agent: microlink\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            host_hdr);
+        if (req_len <= 0 || req_len >= (int)sizeof(req)) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: request snprintf overflow");
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+
+        if ((ssize_t)esp_tls_conn_write(tls, req, req_len) != (ssize_t)req_len) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: TLS write failed");
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+
+        /* Drain the full response (server closes after body). */
+        char resp[2048];
+        int total = 0;
+        while (total < (int)sizeof(resp) - 1) {
+            ssize_t n = esp_tls_conn_read(tls, (unsigned char *)resp + total,
+                                          sizeof(resp) - 1 - total);
+            if (n <= 0) break;
+            total += (int)n;
+        }
+        esp_tls_conn_destroy(tls);
+
+        if (total <= 0) {
+            ESP_LOGE(TAG, "fetch_server_pubkey: empty TLS response");
+            return -1;
+        }
+        resp[total] = '\0';
+
+        if (parse_pubkey_response(resp, ml->ctrl_noise_pubkey) != 0) {
+            return -1;
+        }
+        ml->ctrl_noise_pubkey_valid = true;
+        ESP_LOGI(TAG, "Fetched Noise server pubkey (TLS): %02x%02x%02x%02x...%02x%02x",
+                 ml->ctrl_noise_pubkey[0], ml->ctrl_noise_pubkey[1],
+                 ml->ctrl_noise_pubkey[2], ml->ctrl_noise_pubkey[3],
+                 ml->ctrl_noise_pubkey[30], ml->ctrl_noise_pubkey[31]);
+        return 0;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Plain-HTTP branch.                                                  */
+    /* ------------------------------------------------------------------ */
+    int sock = -1;
+    struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
+    struct addrinfo *res = NULL;
+    int rc = -1;
+
+    ESP_LOGI(TAG, "Fetching Noise server pubkey from http://%s:%s/key?v=88", host, port);
+
+    if (ml_getaddrinfo(host, port, &hints, &res) != 0 || !res) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: DNS resolve failed for %s", host);
+        goto out;
+    }
+
+    sock = ml_socket(res->ai_family, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: socket() failed");
+        goto out;
+    }
+
+    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+    ml_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ml_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    /* Keep the key fetch off the exit-node tunnel, like the coord socket. */
+    ml_bind_sock_to_upstream(ml, sock);
+
+    if (ml_connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: connect() failed: errno=%d", errno);
+        goto out;
+    }
+
+    char req[256];
+    int req_len = snprintf(req, sizeof(req),
+        "GET /key?v=88 HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: microlink\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        (ml->ctrl_host_hdr[0]) ? ml->ctrl_host_hdr : host);
+    if (req_len <= 0 || req_len >= (int)sizeof(req)) goto out;
+
+    if (ml_send(sock, (uint8_t *)req, req_len, 0) != req_len) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: send failed");
+        goto out;
+    }
+
+    /* Read full response (headers + body).  Response is small (~200 bytes). */
+    char resp[2048];
+    int total = 0;
+    while (total < (int)sizeof(resp) - 1) {
+        int n = ml_recv(sock, (uint8_t *)resp + total, sizeof(resp) - 1 - total, 0);
+        if (n <= 0) break;
+        total += n;
+    }
+    if (total <= 0) {
+        ESP_LOGE(TAG, "fetch_server_pubkey: empty HTTP response");
+        goto out;
+    }
+    resp[total] = '\0';
+
+    if (parse_pubkey_response(resp, ml->ctrl_noise_pubkey) != 0) {
+        goto out;
+    }
+    ml->ctrl_noise_pubkey_valid = true;
+    ESP_LOGI(TAG, "Fetched Noise server pubkey: %02x%02x%02x%02x...%02x%02x",
+             ml->ctrl_noise_pubkey[0], ml->ctrl_noise_pubkey[1],
+             ml->ctrl_noise_pubkey[2], ml->ctrl_noise_pubkey[3],
+             ml->ctrl_noise_pubkey[30], ml->ctrl_noise_pubkey[31]);
+    rc = 0;
+
+out:
+    if (sock >= 0) ml_close_sock(sock);
+    if (res) ml_freeaddrinfo(res);
+    return rc;
+}
+
+/* ============================================================================
+ * TLS-aware connection helpers for the coord connection
+ *
+ * When login_server is https:// the coord connection lives inside an esp_tls
+ * handle (ml->coord_tls) and ml->coord_sock is -1; otherwise it is the plain
+ * BSD socket ml->coord_sock. These four helpers are the single dispatch
+ * point so the rest of this file never needs to branch on ml->use_tls.
+ * ========================================================================== */
+
+/* TLS-aware send: dispatches to esp_tls when ml->use_tls is set, else to
+ * the raw socket via ml_send. Returns bytes written on success, -1 on
+ * error. Mirrors ml_send's contract (including errno) so callers don't
+ * need to know which transport is underneath. */
+static int ml_conn_write(microlink_t *ml, const uint8_t *buf, size_t len) {
+    if (ml->use_tls) {
+        ssize_t n = esp_tls_conn_write(ml->coord_tls, buf, len);
+        if (n == ESP_TLS_ERR_SSL_WANT_READ || n == ESP_TLS_ERR_SSL_WANT_WRITE) {
+            /* Transient: retryable exactly like a plain-socket send timeout. */
+            errno = EWOULDBLOCK;
+            return -1;
+        }
+        if (n < 0) {
+            ESP_LOGE(TAG, "ml_conn_write: esp_tls_conn_write failed: %d", (int)n);
+            errno = EIO;
+            return -1;
+        }
+        return (int)n;
+    }
+    return ml_send(ml->coord_sock, buf, len, 0);
+}
+
+/* TLS-aware recv: mirror of ml_conn_write. Returns bytes read, 0 on orderly
+ * close, -1 on error with errno set. esp_tls reports both "no data yet"
+ * (WANT_READ/WANT_WRITE — e.g. an SO_RCVTIMEO timeout on the underlying fd
+ * surfaces as WANT_READ) and hard errors as negative returns WITHOUT setting
+ * errno, but our callers (coord_recv, noise_recv) key their EAGAIN retry
+ * loops off errno — so map the transient cases to EWOULDBLOCK and hard
+ * failures to EIO to keep those retry loops deterministic under TLS. */
+static int ml_conn_read(microlink_t *ml, uint8_t *buf, size_t len) {
+    if (ml->use_tls) {
+        ssize_t n = esp_tls_conn_read(ml->coord_tls, buf, len);
+        if (n == ESP_TLS_ERR_SSL_WANT_READ || n == ESP_TLS_ERR_SSL_WANT_WRITE) {
+            errno = EWOULDBLOCK;
+            return -1;
+        }
+        if (n < 0) {
+            errno = EIO;
+            return -1;
+        }
+        return (int)n;
+    }
+    return ml_recv(ml->coord_sock, buf, len, 0);
+}
+
+/* Return the underlying socket fd suitable for setsockopt / FD_SET / select.
+ * When use_tls is set, this is the fd esp_tls is sitting on top of; otherwise
+ * it's ml->coord_sock directly. Returns -1 if no fd is currently available
+ * (e.g. TLS context torn down). Callers must check for -1 before FD_SET. */
+static int ml_conn_sockfd(microlink_t *ml) {
+    if (ml->use_tls) {
+        int fd = -1;
+        if (ml->coord_tls && esp_tls_get_conn_sockfd(ml->coord_tls, &fd) == ESP_OK) {
+            return fd;
+        }
+        return -1;
+    }
+    return ml->coord_sock;
+}
+
+/* Tear down the coordinator connection.  Destroys the TLS handle if one is
+ * active, closes the raw socket otherwise.  Idempotent: safe to call when
+ * neither is currently held.  After this function returns, ml->coord_tls
+ * is NULL and ml->coord_sock is -1. */
+static void ml_conn_close(microlink_t *ml) {
+    if (ml->coord_tls) {
+        esp_tls_conn_destroy(ml->coord_tls);
+        ml->coord_tls = NULL;
+    }
+    if (ml->coord_sock >= 0) {
+        ml_close_sock(ml->coord_sock);
+        ml->coord_sock = -1;
+    }
+}
+
+/* ============================================================================
  * TCP I/O helpers for coord socket (owned exclusively by this task)
  * ========================================================================== */
 
 static int coord_send(microlink_t *ml, const uint8_t *data, size_t len) {
     /* Set send timeout to prevent indefinite blocking (v1 uses MSG_DONTWAIT) */
     struct timeval snd_tv = { .tv_sec = 5, .tv_usec = 0 };
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
 
     size_t sent = 0;
     while (sent < len) {
-        int n = ml_send(ml->coord_sock, data + sent, len - sent, 0);
+        int n = ml_conn_write(ml, data + sent, len - sent);
         if (n <= 0) {
             ESP_LOGE(TAG, "coord_send failed: sent=%d/%d n=%d errno=%d",
                      (int)sent, (int)len, n, errno);
@@ -157,7 +562,7 @@ static int coord_recv(microlink_t *ml, uint8_t *buf, size_t len) {
     size_t recvd = 0;
     int retries = 0;
     while (recvd < len) {
-        int n = ml_recv(ml->coord_sock, buf + recvd, len - recvd, 0);
+        int n = ml_conn_read(ml, buf + recvd, len - recvd);
         if (n <= 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if (recvd == 0) {
@@ -272,13 +677,83 @@ static int noise_recv(microlink_t *ml, ml_noise_state_t *noise,
 static int do_tcp_connect(microlink_t *ml) {
     int64_t t_start = esp_timer_get_time();
 
-    ESP_LOGI(TAG, "Resolving %s...", CTRL_HOST(ml));
+    /* Parse host+port out of ctrl_host once per attempt.  Accepts "host",
+     * "host:port", "http://host[:port]" and "https://host[:port]" — users
+     * paste their Headscale login_server URL verbatim.  When ctrl_host is
+     * empty we are talking to Tailscale SaaS on port 80, so fill the parsed
+     * fields with ML_CTRL_HOST and "80". */
+    if (ml->ctrl_host[0]) {
+        if (parse_host_port(ml->ctrl_host,
+                            ml->ctrl_host_parsed, sizeof(ml->ctrl_host_parsed),
+                            ml->ctrl_port_str, sizeof(ml->ctrl_port_str),
+                            &ml->use_tls) != 0) {
+            ESP_LOGE(TAG, "Invalid login_server '%s'", ml->ctrl_host);
+            return -1;
+        }
+    } else {
+        strncpy(ml->ctrl_host_parsed, ML_CTRL_HOST, sizeof(ml->ctrl_host_parsed) - 1);
+        ml->ctrl_host_parsed[sizeof(ml->ctrl_host_parsed) - 1] = '\0';
+        strncpy(ml->ctrl_port_str, "80", sizeof(ml->ctrl_port_str) - 1);
+        ml->ctrl_port_str[sizeof(ml->ctrl_port_str) - 1] = '\0';
+        ml->use_tls = false;
+    }
+
+    /* Build "Host:" / HTTP/2 :authority value.  Standard HTTP practice:
+     * omit the port suffix when it is the scheme default (80 plain / 443
+     * TLS), include it otherwise. */
+    if (strcmp(ml->ctrl_port_str, ml->use_tls ? "443" : "80") == 0) {
+        snprintf(ml->ctrl_host_hdr, sizeof(ml->ctrl_host_hdr), "%s", ml->ctrl_host_parsed);
+    } else {
+        snprintf(ml->ctrl_host_hdr, sizeof(ml->ctrl_host_hdr), "%s:%s",
+                 ml->ctrl_host_parsed, ml->ctrl_port_str);
+    }
+
+    /* ====== TLS branch ====================================================
+     * When the login server URL used https://, skip raw TCP and do a full
+     * TLS handshake using the ESP-IDF bundled CA roots (public CAs only —
+     * a self-signed Headscale cert will fail here).  On success the handle
+     * lives in ml->coord_tls and ml->coord_sock stays -1, so all subsequent
+     * I/O and teardown dispatches through the ml_conn_* helpers.
+     * Note: esp_tls owns socket creation, so the exit-node upstream pin
+     * (ml_bind_sock_to_upstream) is not applied on this path.
+     * =================================================================== */
+    if (ml->use_tls) {
+        const esp_tls_cfg_t cfg = {
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms        = 10000,
+            .non_block         = false,
+        };
+        esp_tls_t *tls = esp_tls_init();
+        if (tls == NULL) {
+            ESP_LOGE(TAG, "do_tcp_connect: esp_tls_init failed");
+            return -1;
+        }
+        int port_i = atoi(ml->ctrl_port_str);
+        int rc = esp_tls_conn_new_sync(ml->ctrl_host_parsed,
+                                       (int)strlen(ml->ctrl_host_parsed),
+                                       port_i, &cfg, tls);
+        if (rc != 1) {
+            ESP_LOGE(TAG, "do_tcp_connect: TLS handshake to %s:%d failed (rc=%d)",
+                     ml->ctrl_host_parsed, port_i, rc);
+            esp_tls_conn_destroy(tls);
+            return -1;
+        }
+        ml->coord_tls  = tls;
+        ml->coord_sock = -1;
+        int64_t t_tls = esp_timer_get_time();
+        ESP_LOGI(TAG, "TLS connected to %s:%d ([TIMING] %lld ms)",
+                 ml->ctrl_host_parsed, port_i, (t_tls - t_start) / 1000);
+        return 0;
+    }
+    /* else: plain-TCP path below — unchanged apart from the parsed host/port */
+
+    ESP_LOGI(TAG, "Resolving %s (port %s)...", ml->ctrl_host_parsed, ml->ctrl_port_str);
 
     struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
     struct addrinfo *res = NULL;
 
-    if (ml_getaddrinfo(CTRL_HOST(ml), "80", &hints, &res) != 0 || !res) {
-        ESP_LOGE(TAG, "DNS resolve failed for %s", CTRL_HOST(ml));
+    if (ml_getaddrinfo(ml->ctrl_host_parsed, ml->ctrl_port_str, &hints, &res) != 0 || !res) {
+        ESP_LOGE(TAG, "DNS resolve failed for %s", ml->ctrl_host_parsed);
         return -1;
     }
 
@@ -310,7 +785,7 @@ static int do_tcp_connect(microlink_t *ml) {
     /* Keep the control-plane socket off the exit-node tunnel (see helper). */
     ml_bind_sock_to_upstream(ml, sock);
 
-    ESP_LOGI(TAG, "Connecting to %s:80...", CTRL_HOST(ml));
+    ESP_LOGI(TAG, "Connecting to %s:%s...", ml->ctrl_host_parsed, ml->ctrl_port_str);
 
     if (ml_connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
         ESP_LOGE(TAG, "TCP connect failed: %d", errno);
@@ -339,10 +814,29 @@ static int s_server_extra_data_len = 0;
 static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
     int64_t t_noise_start = esp_timer_get_time();
 
-    /* Initialize Noise state with our machine key and Tailscale's server key */
+    /* For custom control planes (Headscale / Ionscale / dev coordinators),
+     * each instance generates its own Noise keypair, so the hardcoded
+     * Tailscale SaaS server pubkey in ml_noise_init would always fail the
+     * ChaCha20-Poly1305 machine-key decrypt.  Fetch the real server pubkey
+     * from /key?v=88 here, once, and cache it on ml.  (ctrl_host_parsed /
+     * ctrl_port_str were filled by do_tcp_connect just before this state.) */
+    const uint8_t *server_pubkey = NULL;
+    if (ml->ctrl_host[0]) {
+        if (!ml->ctrl_noise_pubkey_valid) {
+            if (fetch_server_pubkey(ml, ml->ctrl_host_parsed, ml->ctrl_port_str) != 0) {
+                ESP_LOGE(TAG, "Failed to fetch server Noise pubkey from %s",
+                         ml->ctrl_host_parsed);
+                return -1;
+            }
+        }
+        server_pubkey = ml->ctrl_noise_pubkey;
+    }
+
+    /* Initialize Noise state with our machine key and the server's Noise
+     * static public key (NULL = hardcoded Tailscale SaaS server key). */
     ml_noise_init(noise,
                    ml->machine_private_key, ml->machine_public_key,
-                   NULL);  /* NULL = use default Tailscale server key */
+                   server_pubkey);
 
     /* Build Noise message 1 (101 bytes) */
     uint8_t msg1[128];
@@ -372,7 +866,7 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
         "X-Tailscale-Handshake: %s\r\n"
         "Content-Length: 0\r\n"
         "\r\n",
-        CTRL_HOST(ml), msg1_b64);
+        CTRL_HOST_HDR(ml), msg1_b64);
 
     ESP_LOGI(TAG, "Sending Noise handshake (msg1=%d bytes, b64=%d chars)", (int)msg1_len, (int)b64_len);
 
@@ -387,7 +881,7 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
     uint8_t *resp = ml_psram_malloc(2048);
     if (!resp) return -1;
 
-    int total = ml_recv(ml->coord_sock, resp, 2047, 0);
+    int total = ml_conn_read(ml, resp, 2047);
     if (total <= 0) {
         ESP_LOGE(TAG, "Handshake recv failed: %d (errno=%d)", total, errno);
         free(resp);
@@ -517,11 +1011,11 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
          * arrive within a few hundred ms even on slow cellular links. */
         ESP_LOGI(TAG, "No extra data in initial buffer, reading proactive frames from socket...");
         struct timeval short_tv = { .tv_sec = 2, .tv_usec = 0 };
-        ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &short_tv, sizeof(short_tv));
+        ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &short_tv, sizeof(short_tv));
 
         extra_data = ml_psram_malloc(1024);
         if (extra_data) {
-            int n = ml_recv(ml->coord_sock, extra_data, 1024, 0);
+            int n = ml_conn_read(ml, extra_data, 1024);
             if (n > 0) {
                 extra_len = n;
                 ESP_LOGI(TAG, "Read %d bytes of proactive frames from socket", extra_len);
@@ -535,7 +1029,7 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
 
         /* Restore normal recv timeout */
         struct timeval normal_tv = { .tv_sec = 60, .tv_usec = 0 };
-        ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &normal_tv, sizeof(normal_tv));
+        ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &normal_tv, sizeof(normal_tv));
     }
 
     if (extra_data && extra_len > 0) {
@@ -831,7 +1325,7 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
     /* HEADERS frame (POST /machine/register) */
     int hdr_len = ml_h2_build_headers_frame(h2_buf + h2_pos, json_len + 512 - h2_pos,
                                               "POST", "/machine/register",
-                                              CTRL_HOST(ml), "application/json",
+                                              CTRL_HOST_HDR(ml), "application/json",
                                               1, false);
     if (hdr_len < 0) { free(json_str); free(h2_buf); return -1; }
     h2_pos += hdr_len;
@@ -1531,7 +2025,7 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
 
     int hdr_len = ml_h2_build_headers_frame(h2_buf + h2_pos, json_len + 512,
                                               "POST", "/machine/map",
-                                              CTRL_HOST(ml), "application/json",
+                                              CTRL_HOST_HDR(ml), "application/json",
                                               3, false);
     if (hdr_len < 0) { free(json_str); free(h2_buf); return -1; }
     h2_pos += hdr_len;
@@ -1566,7 +2060,7 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
 
     /* Set extended recv timeout for large MapResponse (60 seconds) */
     struct timeval rcv_tv = { .tv_sec = 60, .tv_usec = 0 };
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 
     uint64_t recv_start_ms = ml_get_time_ms();
     uint64_t last_progress_ms = recv_start_ms;
@@ -1650,7 +2144,7 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
 
     /* Restore normal recv timeout (5 seconds for long-poll) */
     rcv_tv.tv_sec = 5;
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 
     ESP_LOGI(TAG, "Accumulated %dKB of H2 data from Noise frames (%lums)",
              (int)(h2_total / 1024),
@@ -2088,7 +2582,7 @@ static int do_start_long_poll(microlink_t *ml, ml_noise_state_t *noise) {
     int h2_pos = 0;
     int hdr_len = ml_h2_build_headers_frame(h2_buf, json_len + 512,
                                               "POST", "/machine/map",
-                                              CTRL_HOST(ml), "application/json",
+                                              CTRL_HOST_HDR(ml), "application/json",
                                               5, false);
     if (hdr_len < 0) { free(json_str); free(h2_buf); return -1; }
     h2_pos += hdr_len;
@@ -2197,7 +2691,7 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
     int h2_pos = 0;
     int hdr_len = ml_h2_build_headers_frame(h2_buf, json_len + 512,
                                               "POST", "/machine/map",
-                                              CTRL_HOST(ml), "application/json",
+                                              CTRL_HOST_HDR(ml), "application/json",
                                               sid, false);
     if (hdr_len < 0) { free(json_str); free(h2_buf); return -1; }
     h2_pos += hdr_len;
@@ -2228,14 +2722,35 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     /* Use select() to check if data is available before blocking in recv */
     fd_set readfds;
     FD_ZERO(&readfds);
-    FD_SET(ml->coord_sock, &readfds);
     struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };  /* 50ms */
-    int sel = ml_select_fds(ml->coord_sock + 1, &readfds, NULL, NULL, &tv);
+    int sel;
+    /* Peek TLS-buffered bytes first: mbedtls may already hold decrypted bytes
+     * even when the underlying socket has none, in which case select() would
+     * sit on the wire while data is ready to read.  esp_tls_get_bytes_avail
+     * returns ssize_t and is negative on error — treat that as "nothing
+     * buffered" and fall through to select() instead of letting a -1 wrap
+     * around to SIZE_MAX and spin the loop on a dead handle. */
+    if (ml->use_tls && ml->coord_tls) {
+        ssize_t avail = esp_tls_get_bytes_avail(ml->coord_tls);
+        int peek_fd = ml_conn_sockfd(ml);
+        if (avail > 0) {
+            sel = 1;
+            if (peek_fd >= 0) FD_SET(peek_fd, &readfds);  /* for downstream consumers */
+        } else if (peek_fd < 0) {
+            sel = 0;
+        } else {
+            FD_SET(peek_fd, &readfds);
+            sel = ml_select_fds(peek_fd + 1, &readfds, NULL, NULL, &tv);
+        }
+    } else {
+        FD_SET(ml->coord_sock, &readfds);
+        sel = ml_select_fds(ml->coord_sock + 1, &readfds, NULL, NULL, &tv);
+    }
     if (sel <= 0) return 0;  /* No data available or error */
 
     /* Data available — set short recv timeout for partial frame safety */
     struct timeval tv_recv = { .tv_sec = 2, .tv_usec = 0 };
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &tv_recv, sizeof(tv_recv));
+    ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &tv_recv, sizeof(tv_recv));
 
     uint8_t *frame_buf = ml_psram_malloc(65536);
     if (!frame_buf) return 0;
@@ -2404,10 +2919,7 @@ void ml_coord_task(void *arg) {
                 }
                 break;
             case ML_CMD_DISCONNECT:
-                if (ml->coord_sock >= 0) {
-                    ml_close_sock(ml->coord_sock);
-                    ml->coord_sock = -1;
-                }
+                ml_conn_close(ml);
                 state = COORD_IDLE;
                 ml->state = ML_STATE_IDLE;
                 break;
@@ -2471,8 +2983,7 @@ void ml_coord_task(void *arg) {
             ml->state = ML_STATE_REGISTERING;
             if (do_noise_handshake(ml, &noise) < 0) {
                 ESP_LOGE(TAG, "Noise handshake failed");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2486,8 +2997,7 @@ void ml_coord_task(void *arg) {
         case COORD_H2_PREFACE:
             if (do_h2_preface(ml, &noise) < 0) {
                 ESP_LOGE(TAG, "H2 preface failed");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2498,8 +3008,7 @@ void ml_coord_task(void *arg) {
             ESP_LOGI(TAG, "Registering...");
             if (do_register(ml, &noise) < 0) {
                 ESP_LOGE(TAG, "Registration failed");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2510,8 +3019,7 @@ void ml_coord_task(void *arg) {
             ESP_LOGI(TAG, "Fetching peers...");
             if (do_fetch_peers(ml, &noise) < 0) {
                 ESP_LOGW(TAG, "MapRequest failed, will retry");
-                ml_close_sock(ml->coord_sock);
-                ml->coord_sock = -1;
+                ml_conn_close(ml);
                 state = COORD_RECONNECTING;
                 break;
             }
@@ -2815,10 +3323,7 @@ void ml_coord_task(void *arg) {
                 reconnect_attempts++;
 
                 /* Close old connection */
-                if (ml->coord_sock >= 0) {
-                    ml_close_sock(ml->coord_sock);
-                    ml->coord_sock = -1;
-                }
+                ml_conn_close(ml);
 
                 /* Reset Noise state for fresh handshake */
                 memset(&noise, 0, sizeof(noise));
@@ -2830,10 +3335,7 @@ void ml_coord_task(void *arg) {
     }
 
     /* Cleanup */
-    if (ml->coord_sock >= 0) {
-        ml_close_sock(ml->coord_sock);
-        ml->coord_sock = -1;
-    }
+    ml_conn_close(ml);
     memset(&noise, 0, sizeof(noise));
 
     ESP_LOGI(TAG, "Coord task exiting");

@@ -410,7 +410,7 @@ tailscale:
 | `auth_key` | *(required)* | Tailscale auth key (`tskey-auth-...`). Use `!secret`. |
 | `hostname` | `""` | Name the node registers as. Empty → Tailscale picks one. |
 | `max_peers` | `16` | Maximum number of peers to track. Raise if your tailnet has more than 16 nodes (up to 64). |
-| `login_server` | `""` | Custom control-plane host. Empty uses the official Tailscale SaaS coordinator. Set to a Headscale (or other Tailscale-compatible) coordinator to point the node elsewhere. Accepts a bare hostname, an IP, `host:port`, or a full `http://host[:port]` URL; `https://` is rejected. Authentication and initial registration work end-to-end against Headscale 0.23.0; see *Custom control plane (Headscale)* under Deployment Notes for the current caveats. Leave empty for Tailscale SaaS. |
+| `login_server` | `""` | Custom control-plane host. Empty uses the official Tailscale SaaS coordinator. Set to a Headscale (or other Tailscale-compatible) coordinator to point the node elsewhere. Accepts a bare hostname, an IP, `host:port`, or a full `http://host[:port]` / `https://host[:port]` URL. HTTPS is validated against the ESP-IDF public-CA bundle (Let's Encrypt etc.; self-signed certs are not supported). Authentication and initial registration work end-to-end against Headscale 0.23.0; see *Custom control plane (Headscale)* under Deployment Notes for the current caveats. Leave empty for Tailscale SaaS. |
 | `disable_telemetry` | `false` | Set to `true` to turn off the anonymous telemetry (see [Telemetry](#telemetry)). |
 
 > **No `update_interval`.** The component is fully event-driven: sensors publish only when the underlying state actually changes. There is no polling loop to tune — and nothing to reduce CPU/network cost by raising.
@@ -566,7 +566,7 @@ If your architecture requires the ESP to route traffic on behalf of other device
 
 ### Custom control plane (Headscale)
 
-> **TL;DR:** `login_server` supports Headscale end-to-end. The device completes the Noise handshake, registers, gets a tailnet IP, and stays online via the streaming MapResponse long-poll. Verified against Headscale 0.23.0.
+> **TL;DR:** `login_server` supports Headscale end-to-end, over plain HTTP or HTTPS (public-CA certs). The device completes the Noise handshake, registers, gets a tailnet IP, and stays online via the streaming MapResponse long-poll. Verified against Headscale 0.23.0.
 
 By default the component registers against the official Tailscale SaaS coordinator at `controlplane.tailscale.com`. That is the recommended production path.
 
@@ -576,7 +576,7 @@ The `login_server` YAML option replaces the control-plane host microlink talks t
 tailscale:
   auth_key: "<preauth key from headscale>"
   hostname: "esp32-tailscale"
-  login_server: "http://192.168.1.42:80"   # or bare IP / hostname / host:port
+  login_server: "http://192.168.1.42:80"   # or bare IP / hostname / host:port / https://…
 ```
 
 Accepted forms:
@@ -584,7 +584,9 @@ Accepted forms:
 - Bare hostname or IP: `192.168.1.42`, `headscale.local`
 - With explicit port: `192.168.1.42:8080`
 - Full URL: `http://192.168.1.42`, `http://192.168.1.42:80`
-- `https://…` is **rejected** — TLS is not implemented in this code path.
+- HTTPS URL: `https://headscale.example.com`, `https://headscale.example.com:8443` — the whole control-plane session (key fetch, Noise upgrade, register, long-poll) runs inside TLS. This is the right choice when Headscale sits behind a reverse proxy (Caddy, Traefik, nginx) that redirects HTTP to HTTPS.
+
+**HTTPS certificate requirement:** the TLS connection is validated against the ESP-IDF **public-CA certificate bundle**. A certificate from Let's Encrypt or any other public CA works out of the box; **self-signed certificates and private CAs are not supported yet** — there is currently no `custom CA` / `skip verify` option. If your Headscale uses a self-signed cert, either front it with a public-CA cert or use plain `http://` on a trusted LAN.
 
 **What works end-to-end against Headscale 0.23.0:**
 

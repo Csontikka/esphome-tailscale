@@ -11,7 +11,12 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 ## [Unreleased]
 
 ### Added
+- **`login_server` now accepts `https://` URLs** — Headscale (or any Tailscale-compatible coordinator) behind TLS works, including reverse-proxy setups that force HTTPS with a 308 redirect ([#23](https://github.com/Csontikka/esphome-tailscale/issues/23)). The control-plane connection (`/key` fetch, Noise upgrade, register, long-poll) runs inside an `esp_tls` session validated against the ESP-IDF public-CA certificate bundle, so Let's Encrypt and other public-CA certs work out of the box; **self-signed / private-CA certs are not supported yet**. Based on [@jonny190](https://github.com/jonny190)'s work in [#18](https://github.com/Csontikka/esphome-tailscale/pull/18), re-ported onto the current vendored microlink line with fixes (deterministic `errno` mapping for the TLS read path, TLS-buffer peek before `select()`, scheme-flag reset in URL parsing).
+
 - **Material Design icons on every default-package entity.** Each entity in `packages/tailscale/tailscale.yaml` now ships a sensible `icon:` (e.g. `mdi:shield-check` for VPN Connected, `mdi:account-network` for Peers Online, `mdi:calendar-clock` for Node Key Expiry), so the Tailscale entities show meaningful glyphs in Home Assistant out of the box. Inspired by [@sorrypqa](https://github.com/sorrypqa)'s fork. Not a breaking change — the entity `name`/`id`/`unique_id` are unchanged, and you can still override any icon in HA per entity.
+
+### Fixed
+- **Custom control-plane (Headscale) support regressed in 0.3.0 — restored.** The 0.3.0 vendored-library resync silently dropped both the `login_server` URL parsing (scheme/port were handed raw to the DNS resolver and the port was hardcoded to 80 — the "DNS error" in [#23](https://github.com/Csontikka/esphome-tailscale/issues/23)) and the Noise server-key fetch (`GET /key?v=88`), without which every Headscale handshake failed against the baked-in Tailscale SaaS key. Versions 0.3.0–0.4.2 could therefore only connect to Tailscale SaaS; `host`, `host:port`, `http://…` and (new) `https://…` login servers all work again.
 
 ### Documentation
 - **Troubleshooting:** added an entry explaining that PSRAM is a hard requirement and that forcing the PSRAM check off (as a few forks do by hardcoding the detected size to `0`) does **not** enable a working no-PSRAM mode — that small-buffer path was never implemented, so it only stops the device from connecting ([#9](https://github.com/Csontikka/esphome-tailscale/issues/9)).

@@ -15,6 +15,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "cJSON.h"
+#include "esp_tls.h"
 #include <string.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -194,6 +195,8 @@ microlink_t *microlink_init(const microlink_config_t *config) {
     ml->register_user_id = -1;        /* "no RegisterResponse yet" */
     ml->register_user_name[0] = '\0';
     ml->coord_sock = -1;
+    ml->use_tls    = false;
+    ml->coord_tls  = NULL;
     ml->disco_sock4 = -1;
     ml->disco_sock6 = -1;
     ml->stun_sock = -1;
@@ -506,6 +509,15 @@ esp_err_t microlink_stop(microlink_t *ml) {
      * in its normal error path and there is no double-close / fd-reuse race. */
     if (ml->derp.sockfd >= 0) shutdown(ml->derp.sockfd, SHUT_RDWR);
     if (ml->coord_sock >= 0)  shutdown(ml->coord_sock,  SHUT_RDWR);
+    /* TLS control-plane connection: coord_sock is -1 and the fd lives inside
+     * the esp_tls handle — shut that down too so a blocked esp_tls_conn_read
+     * in the coord task wakes up the same way the plain path does. The coord
+     * task still owns and destroys the TLS handle in its own teardown path. */
+    if (ml->coord_tls) {
+        int tls_fd = -1;
+        if (esp_tls_get_conn_sockfd(ml->coord_tls, &tls_fd) == ESP_OK && tls_fd >= 0)
+            shutdown(tls_fd, SHUT_RDWR);
+    }
     /* The coord task may be parked in its reconnect backoff (xQueueReceive on
      * coord_cmd_queue, up to a multi-second timeout) rather than in recv. Poke
      * the queue so it returns to the loop top and sees the shutdown bit
