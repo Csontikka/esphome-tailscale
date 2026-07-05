@@ -43,7 +43,9 @@ class TailscaleComponent : public Component {
   void set_max_peers(uint8_t max) { this->max_peers_ = max; }
   void set_login_server(const std::string &server) { this->login_server_ = server; }
   void set_telemetry_disabled(bool disabled) { this->telemetry_disabled_ = disabled; }
+#ifdef USE_SWITCH
   void set_debug_log_switch(switch_::Switch *sw) { this->debug_log_switch_ = sw; }
+#endif
   void apply_debug_log(bool enabled);
   void apply_runtime_auth_key(const std::string &key);
   bool is_auth_key_overridden() const { return this->auth_key_overridden_; }

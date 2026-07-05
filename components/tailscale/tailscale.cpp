@@ -54,7 +54,12 @@ void TailscaleComponent::apply_debug_log(bool enabled) {
 }
 
 void TailscaleComponent::setup() {
-  bool debug_on = (this->debug_log_switch_ != nullptr) && this->debug_log_switch_->state;
+  bool debug_on = false;
+#ifdef USE_SWITCH
+  // Only when a switch platform is in the build — configs without any
+  // switch (e.g. the tailscale-core package alone) have no switch_ ns.
+  debug_on = (this->debug_log_switch_ != nullptr) && this->debug_log_switch_->state;
+#endif
   this->apply_debug_log(debug_on);
   ESP_LOGI(TAG, "Initializing Tailscale (MicroLink)...");
 

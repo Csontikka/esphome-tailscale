@@ -10,6 +10,12 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **Compile error with the `tailscale-core` package (or any config without a `switch:`).** `tailscale.h` referenced `switch_::Switch` in the `set_debug_log_switch` setter (and `setup()` read the debug-log switch) without the `#ifdef USE_SWITCH` guard, so builds that include no switch platform at all failed with `'switch_' has not been declared` ([#26](https://github.com/Csontikka/esphome-tailscale/issues/26)). Both sites are now guarded; entity-less builds compile again.
+
+### Documentation
+- **Troubleshooting:** added the `Found multiple SNTP configurations but id is inconsistent` entry — the package ships its own SNTP (`id: tailscale_time`); extend it with `id: !extend tailscale_time` instead of declaring a second SNTP block ([#26](https://github.com/Csontikka/esphome-tailscale/issues/26)).
+
 ## [0.5.0] — 2026-07-02
 
 ### Added

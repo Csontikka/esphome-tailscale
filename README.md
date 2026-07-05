@@ -706,6 +706,24 @@ Check the serial log for the state machine output. You should cycle through `IDL
 | `REGISTERING` | Control plane rejected the auth key | Key expired, used on too many devices, or the tailnet has device approval on — check the Tailscale admin (or Headplane UI / `headscale` CLI for Headscale) |
 | `ERROR` | microlink crash | See serial log for details; try `VPN Reconnect` button or reboot |
 
+### `Found multiple SNTP configurations but id is inconsistent` at validation
+
+The package ships its own SNTP time source (`time: platform: sntp` with `id: tailscale_time`) because microlink needs a valid wall clock (TLS certificate validation, key-expiry math). If your own YAML **also** declares a `time: - platform: sntp` block, ESPHome rejects the config with this error. Don't delete either block — **extend** the package's instead ([#26](https://github.com/Csontikka/esphome-tailscale/issues/26)):
+
+```yaml
+time:
+  - platform: sntp
+    id: !extend tailscale_time   # merge into the package's SNTP instead of adding a second one
+    # your own keys merge in as usual:
+    servers:
+      - hu.pool.ntp.org
+    on_time:
+      - seconds: 0
+        minutes: /5
+        then:
+          - logger.log: "5 minutes passed"
+```
+
 ### `Device Memory` shows `Internal RAM` even though your board has PSRAM
 
 ESPHome's `psram:` component needs to know your specific PSRAM type and clock speed to initialize it correctly. The `esp32-s3-devkitc-1` board defaults assume **octal 80MHz** PSRAM, which matches `N8R8` / `N16R8` modules but **not** the cheaper `N8R2` / `N16R2` variants (quad 40MHz). Listings often label all of these as "WROOM-1" without making the difference clear, and an N8R2 board sold as "N16R8" is a common mismatch.
