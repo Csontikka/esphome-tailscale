@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-07-06
+
 ### Fixed
 - **Compile error with the `tailscale-core` package (or any config without a `switch:`).** `tailscale.h` referenced `switch_::Switch` in the `set_debug_log_switch` setter (and `setup()` read the debug-log switch) without the `#ifdef USE_SWITCH` guard, so builds that include no switch platform at all failed with `'switch_' has not been declared` ([#26](https://github.com/Csontikka/esphome-tailscale/issues/26)). Both sites are now guarded; entity-less builds compile again.
 
