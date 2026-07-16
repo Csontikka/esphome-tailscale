@@ -6,6 +6,7 @@ from esphome.const import (
     STATE_CLASS_MEASUREMENT,
 )
 from esphome.components.esp32 import (
+    add_idf_component,
     add_idf_sdkconfig_option,
     include_builtin_idf_component,
 )
@@ -112,36 +113,24 @@ async def to_code(config):
     add_idf_sdkconfig_option("CONFIG_LOG_TAG_LEVEL_IMPL_NONE", False)
     add_idf_sdkconfig_option("CONFIG_LOG_TAG_LEVEL_IMPL_LINKED_LIST", True)
 
-    # Add microlink include paths (config override handled by Kconfig defaults)
+    # Add microlink include paths. On older ESPHome (and the arduino path)
+    # these -I flags let the headers resolve directly; on the 2026.7+ esp-idf
+    # build they don't propagate, but the component REQUIRE (below) covers it.
     cg.add_build_flag(f"-I{ml_include}")
     cg.add_build_flag(f"-I{ml_src}")
 
-    # Generate patch_cmake.py to add microlink ESP-IDF components to CMake build
-    import esphome.core as core
-    ml_components = os.path.join(project_root, "microlink", "components").replace("\\", "/")
-    ml_wg = f"{ml_base}/components"
-
-    build_dir = core.CORE.relative_build_path("")
-    os.makedirs(build_dir, exist_ok=True)
-    with open(os.path.join(build_dir, "patch_cmake.py"), "w") as f:
-        f.write(f'''import os
-Import("env")
-cmake_file = os.path.join(env.subst("$PROJECT_DIR"), "CMakeLists.txt")
-components = "{ml_components}"
-wg = "{ml_wg}"
-if os.path.exists(cmake_file):
-    content = open(cmake_file).read()
-    if components not in content:
-        content = content.replace(
-            "include($ENV{{IDF_PATH}}/tools/cmake/project.cmake)",
-            'set(EXTRA_COMPONENT_DIRS "${{EXTRA_COMPONENT_DIRS}}" "' + components + '" "' + wg + '")\\n'
-            "include($ENV{{IDF_PATH}}/tools/cmake/project.cmake)")
-        open(cmake_file, "w").write(content)
-else:
-    content = 'cmake_minimum_required(VERSION 3.16.0)\\n'
-    content += 'set(EXTRA_COMPONENT_DIRS "${{EXTRA_COMPONENT_DIRS}}" "' + components + '" "' + wg + '")\\n'
-    content += 'include($ENV{{IDF_PATH}}/tools/cmake/project.cmake)\\n'
-    content += 'project({core.CORE.name})\\n'
-    open(cmake_file, "w").write(content)
-''')
-    cg.add_platformio_option("extra_scripts", ["pre:patch_cmake.py"])
+    # Wire the vendored microlink ESP-IDF components into the build via
+    # ESPHome's official add_idf_component() with a local `path`. This replaces
+    # the previous approach — a generated patch_cmake.py registered through
+    # `extra_scripts` in platformio.ini that appended EXTRA_COMPONENT_DIRS — which
+    # the ESPHome 2026.7 build_gen rewrite silently stopped honoring (the esp-idf
+    # build no longer routes component options through platformio.ini), so
+    # <microlink.h> could not be found (issue #28). add_idf_component registers
+    # each local path as a managed component that ESPHome's main REQUIREs, so the
+    # headers resolve; its signature is identical on 2026.6.x and 2026.7, so this
+    # works across both. wireguard_lwip is microlink's nested dependency and is
+    # added as its own component so microlink's REQUIRES(wireguard_lwip) resolves.
+    add_idf_component(
+        name="wireguard_lwip", path=f"{ml_base}/components/wireguard_lwip"
+    )
+    add_idf_component(name="microlink", path=ml_base)

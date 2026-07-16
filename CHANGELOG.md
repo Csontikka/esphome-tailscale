@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **Builds again on ESPHome 2026.7.** 2026.7 reworked the ESP-IDF build generation and stopped routing component options through `platformio.ini` — the mechanism the component used to wire in the vendored `microlink` library (a generated `patch_cmake.py` registered via `extra_scripts`, plus `-I` include flags) silently no longer ran, so the build failed with `fatal error: microlink.h: No such file or directory` ([#28](https://github.com/Csontikka/esphome-tailscale/issues/28)). microlink (and its nested `wireguard_lwip`) are now registered through ESPHome's official `add_idf_component()` (local `path`), which works the same on 2026.6.x and 2026.7. Verified building clean on both.
+
 ## [0.5.2] — 2026-07-16
 
 ### Fixed
