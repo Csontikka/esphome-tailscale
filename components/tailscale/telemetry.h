@@ -46,7 +46,7 @@ namespace esphome {
 namespace tailscale {
 
 /* Reported in the "v" field. Bump on each release to match the CHANGELOG. */
-#define TAILSCALE_TELEMETRY_VERSION "0.5.1"
+#define TAILSCALE_TELEMETRY_VERSION "0.5.2"
 #define TAILSCALE_TELEMETRY_URL "https://esphome-tailscale-telemetry.csontikka.workers.dev/v1/event"
 #define TAILSCALE_TELEMETRY_KEY "860cbe21c497a43c745715857184058d"
 
