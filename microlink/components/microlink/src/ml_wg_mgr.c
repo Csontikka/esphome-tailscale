@@ -485,119 +485,14 @@ static int find_peer_by_node_id(microlink_t *ml, uint64_t node_id) {
     return -1;
 }
 
-static int add_peer(microlink_t *ml, const ml_peer_update_t *update) {
-    /* Peer allowlist filter: don't waste WG slots on non-allowed peers.
-     * Still process updates for existing peers (they may become allowed later). */
-    if (!ml_config_peer_is_allowed(ml->config_httpd, update->vpn_ip)) {
-        return -1;  /* Silently skip — peer not in allowlist */
-    }
 
-    /* Check if peer already exists */
-    int idx = find_peer_by_key(ml, update->public_key);
-    if (idx >= 0) {
-        ESP_LOGI(TAG, "Updating existing peer %s (idx=%d)", update->hostname, idx);
-    } else {
-        /* Find free slot */
-        idx = -1;
-        for (int i = 0; i < ML_MAX_PEERS; i++) {
-            if (!ml->peers[i].active) {
-                idx = i;
-                break;
-            }
-        }
-
-        /* Peer table full — evict LRU non-priority peer if incoming peer is priority */
-        if (idx < 0 && ml->config.priority_peer_ip != 0 &&
-            update->vpn_ip == ml->config.priority_peer_ip) {
-            uint64_t oldest_ms = UINT64_MAX;
-            int evict_idx = -1;
-            for (int i = 0; i < ML_MAX_PEERS; i++) {
-                if (!ml->peers[i].active) continue;
-                if (ml->peers[i].vpn_ip == ml->config.priority_peer_ip) continue;
-                uint64_t last_activity = ml->peers[i].last_send_ms;
-                if (ml->peers[i].last_pong_recv_ms > last_activity)
-                    last_activity = ml->peers[i].last_pong_recv_ms;
-                if (last_activity < oldest_ms) {
-                    oldest_ms = last_activity;
-                    evict_idx = i;
-                }
-            }
-            if (evict_idx >= 0) {
-                char evict_ip[16];
-                microlink_ip_to_str(ml->peers[evict_idx].vpn_ip, evict_ip);
-                ESP_LOGW(TAG, "Evicting LRU peer %s (%s) for priority peer %s",
-                         ml->peers[evict_idx].hostname, evict_ip, update->hostname);
-                if (ml->peers[evict_idx].wg_peer_index >= 0 && ml->wg_netif) {
-                    wireguardif_remove_peer((struct netif *)ml->wg_netif,
-                                            ml->peers[evict_idx].wg_peer_index);
-                }
-                ml->peers[evict_idx].active = false;
-                idx = evict_idx;
-            }
-        }
-
-        if (idx < 0) {
-            ESP_LOGW(TAG, "Peer table full (%d slots), cannot add %s",
-                     ML_MAX_PEERS, update->hostname);
-            return -1;
-        }
-        if (idx >= ml->peer_count) {
-            ml->peer_count = idx + 1;
-        }
-    }
-
-    ml_peer_t *p = &ml->peers[idx];
-    p->vpn_ip = update->vpn_ip;
-    memcpy(p->public_key, update->public_key, 32);
-    memcpy(p->disco_key, update->disco_key, 32);
-    strncpy(p->hostname, update->hostname, sizeof(p->hostname) - 1);
-    p->hostname[sizeof(p->hostname) - 1] = '\0';
-    p->derp_region = update->derp_region;
-    p->active = true;
-
-    /* Copy endpoints */
-    p->endpoint_count = update->endpoint_count;
-    for (int i = 0; i < update->endpoint_count && i < ML_MAX_ENDPOINTS; i++) {
-        p->endpoints[i].ip = update->endpoints[i].ip;
-        p->endpoints[i].port = update->endpoints[i].port;
-        p->endpoints[i].is_ipv6 = update->endpoints[i].is_ipv6;
-    }
-
-    /* Initialize DISCO rate limiting state */
-    p->last_ping_sent_ms = 0;
-    p->last_pong_recv_ms = 0;
-    p->trust_until_ms = 0;
-    p->last_send_ms = 0;
-    p->last_upgrade_ms = 0;
-    p->has_direct_path = false;
-    p->best_ip = 0;
-    p->best_port = 0;
-    p->wg_peer_index = -1;
-    p->peer_added_ms = ml_get_time_ms();
-    p->derp_fallback_active = false;
-    p->is_exit_node = update->is_exit_node;
-    p->subnet_route_count = update->subnet_route_count;
-    if (p->subnet_route_count > MICROLINK_MAX_PEER_ROUTES) {
-        p->subnet_route_count = MICROLINK_MAX_PEER_ROUTES;
-    }
-    for (int r = 0; r < p->subnet_route_count; r++) {
-        p->subnet_routes[r] = update->subnet_routes[r];
-    }
-    /* Liveness flag from control plane. has_online=false means the field was
-     * absent in this MapResponse; default to true rather than offline so a
-     * silent control plane doesn't grey out the whole peer list. */
-    p->online = update->has_online ? update->online : true;
-    if (update->has_node_id) {
-        p->node_id = update->node_id;
-    }
-
-    char ip_str[16];
-    microlink_ip_to_str(update->vpn_ip, ip_str);
-    ESP_LOGI(TAG, "Peer added: %s (%s) idx=%d endpoints=%d derp=%d key=%02x%02x%02x%02x%02x%02x%02x%02x",
-             p->hostname, ip_str, idx, p->endpoint_count, p->derp_region,
-             p->public_key[0], p->public_key[1], p->public_key[2], p->public_key[3],
-             p->public_key[4], p->public_key[5], p->public_key[6], p->public_key[7]);
-
+/* Register one microlink peer into the wireguard-lwip peer table and set
+ * p->wg_peer_index (or -1 on failure). Shared by add_peer() (MapResponse-
+ * driven) and the post-init reconciliation pass in the wg_mgr task: peers
+ * that entered ml->peers[] before the WG interface existed (NVS-preloaded
+ * cache) would otherwise stay DISCO-visible but WireGuard-dead — ping
+ * pongs, every TCP connection times out. */
+static void wg_register_peer(microlink_t *ml, ml_peer_t *p) {
     /* Add to wireguard-lwip */
     if (ml->wg_netif) {
         struct netif *netif = (struct netif *)ml->wg_netif;
@@ -728,6 +623,121 @@ static int add_peer(microlink_t *ml, const ml_peer_update_t *update) {
             p->wg_peer_index = -1;
         }
     }
+}
+static int add_peer(microlink_t *ml, const ml_peer_update_t *update) {
+    /* Peer allowlist filter: don't waste WG slots on non-allowed peers.
+     * Still process updates for existing peers (they may become allowed later). */
+    if (!ml_config_peer_is_allowed(ml->config_httpd, update->vpn_ip)) {
+        return -1;  /* Silently skip — peer not in allowlist */
+    }
+
+    /* Check if peer already exists */
+    int idx = find_peer_by_key(ml, update->public_key);
+    if (idx >= 0) {
+        ESP_LOGI(TAG, "Updating existing peer %s (idx=%d)", update->hostname, idx);
+    } else {
+        /* Find free slot */
+        idx = -1;
+        for (int i = 0; i < ML_MAX_PEERS; i++) {
+            if (!ml->peers[i].active) {
+                idx = i;
+                break;
+            }
+        }
+
+        /* Peer table full — evict LRU non-priority peer if incoming peer is priority */
+        if (idx < 0 && ml->config.priority_peer_ip != 0 &&
+            update->vpn_ip == ml->config.priority_peer_ip) {
+            uint64_t oldest_ms = UINT64_MAX;
+            int evict_idx = -1;
+            for (int i = 0; i < ML_MAX_PEERS; i++) {
+                if (!ml->peers[i].active) continue;
+                if (ml->peers[i].vpn_ip == ml->config.priority_peer_ip) continue;
+                uint64_t last_activity = ml->peers[i].last_send_ms;
+                if (ml->peers[i].last_pong_recv_ms > last_activity)
+                    last_activity = ml->peers[i].last_pong_recv_ms;
+                if (last_activity < oldest_ms) {
+                    oldest_ms = last_activity;
+                    evict_idx = i;
+                }
+            }
+            if (evict_idx >= 0) {
+                char evict_ip[16];
+                microlink_ip_to_str(ml->peers[evict_idx].vpn_ip, evict_ip);
+                ESP_LOGW(TAG, "Evicting LRU peer %s (%s) for priority peer %s",
+                         ml->peers[evict_idx].hostname, evict_ip, update->hostname);
+                if (ml->peers[evict_idx].wg_peer_index >= 0 && ml->wg_netif) {
+                    wireguardif_remove_peer((struct netif *)ml->wg_netif,
+                                            ml->peers[evict_idx].wg_peer_index);
+                }
+                ml->peers[evict_idx].active = false;
+                idx = evict_idx;
+            }
+        }
+
+        if (idx < 0) {
+            ESP_LOGW(TAG, "Peer table full (%d slots), cannot add %s",
+                     ML_MAX_PEERS, update->hostname);
+            return -1;
+        }
+        if (idx >= ml->peer_count) {
+            ml->peer_count = idx + 1;
+        }
+    }
+
+    ml_peer_t *p = &ml->peers[idx];
+    p->vpn_ip = update->vpn_ip;
+    memcpy(p->public_key, update->public_key, 32);
+    memcpy(p->disco_key, update->disco_key, 32);
+    strncpy(p->hostname, update->hostname, sizeof(p->hostname) - 1);
+    p->hostname[sizeof(p->hostname) - 1] = '\0';
+    p->derp_region = update->derp_region;
+    p->active = true;
+
+    /* Copy endpoints */
+    p->endpoint_count = update->endpoint_count;
+    for (int i = 0; i < update->endpoint_count && i < ML_MAX_ENDPOINTS; i++) {
+        p->endpoints[i].ip = update->endpoints[i].ip;
+        p->endpoints[i].port = update->endpoints[i].port;
+        p->endpoints[i].is_ipv6 = update->endpoints[i].is_ipv6;
+    }
+
+    /* Initialize DISCO rate limiting state */
+    p->last_ping_sent_ms = 0;
+    p->last_pong_recv_ms = 0;
+    p->trust_until_ms = 0;
+    p->last_send_ms = 0;
+    p->last_upgrade_ms = 0;
+    p->has_direct_path = false;
+    p->best_ip = 0;
+    p->best_port = 0;
+    p->wg_peer_index = -1;
+    p->peer_added_ms = ml_get_time_ms();
+    p->derp_fallback_active = false;
+    p->is_exit_node = update->is_exit_node;
+    p->subnet_route_count = update->subnet_route_count;
+    if (p->subnet_route_count > MICROLINK_MAX_PEER_ROUTES) {
+        p->subnet_route_count = MICROLINK_MAX_PEER_ROUTES;
+    }
+    for (int r = 0; r < p->subnet_route_count; r++) {
+        p->subnet_routes[r] = update->subnet_routes[r];
+    }
+    /* Liveness flag from control plane. has_online=false means the field was
+     * absent in this MapResponse; default to true rather than offline so a
+     * silent control plane doesn't grey out the whole peer list. */
+    p->online = update->has_online ? update->online : true;
+    if (update->has_node_id) {
+        p->node_id = update->node_id;
+    }
+
+    char ip_str[16];
+    microlink_ip_to_str(update->vpn_ip, ip_str);
+    ESP_LOGI(TAG, "Peer added: %s (%s) idx=%d endpoints=%d derp=%d key=%02x%02x%02x%02x%02x%02x%02x%02x",
+             p->hostname, ip_str, idx, p->endpoint_count, p->derp_region,
+             p->public_key[0], p->public_key[1], p->public_key[2], p->public_key[3],
+             p->public_key[4], p->public_key[5], p->public_key[6], p->public_key[7]);
+
+    wg_register_peer(ml, p);
 
     /* Persist to NVS for fast boot next time */
     ml_peer_nvs_save(p);
@@ -1955,6 +1965,24 @@ void ml_wg_mgr_task(void *arg) {
     } else {
         /* Update VPN IP if coord already set it */
         wg_update_vpn_ip(ml);
+
+        /* Reconcile peers that entered ml->peers[] before the WG interface
+         * existed — the NVS pre-load above lands cache entries with
+         * active=true but wg_peer_index == -1. Without this pass they stay
+         * DISCO-visible yet WireGuard-dead (ping pongs, every TCP times
+         * out) until a full netmap happens to re-deliver them. */
+        int reconciled = 0;
+        for (int i = 0; i < ml->peer_count; i++) {
+            ml_peer_t *rp = &ml->peers[i];
+            if (rp->active && rp->wg_peer_index < 0 && rp->vpn_ip != 0) {
+                wg_register_peer(ml, rp);
+                if (rp->wg_peer_index >= 0) reconciled++;
+            }
+        }
+        if (reconciled > 0) {
+            ESP_LOGI(TAG, "Reconciled %d cached peer(s) into WireGuard", reconciled);
+        }
+
         xEventGroupSetBits(ml->events, ML_EVT_WG_READY);
     }
 
@@ -2080,6 +2108,19 @@ void ml_wg_mgr_task(void *arg) {
 
         /* Throughput-collapse diag: full state snapshot every 10 s. */
         if (now - last_snapshot_ms >= 10000) {
+            /* Self-heal: keep the netif address in sync with the control
+             * plane's VPN-IP assignment. wg_init_interface can run before
+             * the (streamed) netmap delivers the real address — a netif
+             * stuck on the temp 100.64.0.1 silently drops every inbound
+             * packet addressed to the real tailnet IP. */
+            if (ml->wg_netif && ml->vpn_ip != 0) {
+                struct netif *sn = (struct netif *)ml->wg_netif;
+                uint32_t cur_ip = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&sn->ip_addr)));
+                if (cur_ip != ml->vpn_ip) {
+                    wg_update_vpn_ip(ml);
+                    ESP_LOGW(TAG, "WG netif address re-synced to control-plane VPN IP");
+                }
+            }
             dump_wg_state_snapshot(ml);
             last_snapshot_ms = now;
         }

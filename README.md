@@ -785,7 +785,9 @@ tailscale:
   max_peers: 32  # or 48, or 64
 ```
 
-PSRAM is required regardless; a higher `max_peers` just uses more of it (64 is the hard cap).
+PSRAM is required regardless; a higher `max_peers` just uses more memory (64 is the hard cap; each slot costs ~1 KB in the peer tables).
+
+> **Version note:** on **0.5.1 and earlier**, `max_peers` above 16 did not actually take effect in the WireGuard layer — peers 17+ were discovered (Tailscale `ping` answered) but could never carry TCP, and *which* 16 peers worked was re-shuffled every boot. If you run a tailnet with more than 16 nodes, update to a release newer than 0.5.1 before raising this value.
 
 ### `HA API Connection Route` shows `Tailscale (unknown)`
 

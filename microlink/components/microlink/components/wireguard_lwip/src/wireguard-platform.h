@@ -36,10 +36,19 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include "sdkconfig.h"
 
-// Peers are allocated statically inside the device structure to avoid malloc
-// Increased from 1 to support multiple Tailscale peers (10 peers for larger networks)
+// Peers are allocated statically inside the device structure to avoid malloc.
+// The cap MUST match microlink's peer table (CONFIG_ML_MAX_PEERS, driven by the
+// ESPHome `max_peers:` option): a smaller WG table silently strands peers 17+
+// in a discovered-but-sessionless state — DISCO ping still pongs, but every
+// TCP connection to/from them times out (wireguardif_add_peer -> ERR_MEM,
+// wg_peer_index stays -1). Each slot costs ~0.9 KB inside wireguard_device.
+#ifdef CONFIG_ML_MAX_PEERS
+#define WIREGUARD_MAX_PEERS CONFIG_ML_MAX_PEERS
+#else
 #define WIREGUARD_MAX_PEERS 16
+#endif
 #define WIREGUARD_MAX_SRC_IPS 2
 
 // Per device limit on accepting (valid) initiation requests - per peer

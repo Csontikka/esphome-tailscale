@@ -3135,8 +3135,6 @@ void ml_coord_task(void *arg) {
                     break;
                 }
 
-                xEventGroupSetBits(ml->events, ML_EVT_COORD_REGISTERED);
-
                 if (fp_rc == 1) {
                     /* Empty fetch response (Headscale >= 0.26): the initial
                      * netmap — Node, peers AND DERPMap — is only delivered
@@ -3157,6 +3155,16 @@ void ml_coord_task(void *arg) {
                         ESP_LOGW(TAG, "No initial netmap on the long-poll stream yet");
                     }
                 }
+
+                /* Signal registration only now — the wg_mgr task wakes on
+                 * this bit and immediately snapshots ml->vpn_ip into the WG
+                 * netif address. On the streamed-netmap path (Headscale >=
+                 * 0.26) the VPN IP is only known after the stream read
+                 * above; signalling before it left the netif on the temp
+                 * 100.64.0.1 forever, and a netif whose address never
+                 * matches the real tailnet IP silently drops every inbound
+                 * packet (all TCP dead while DISCO keeps answering). */
+                xEventGroupSetBits(ml->events, ML_EVT_COORD_REGISTERED);
 
                 if (!ml->derp.connected) {
                     /* Signal DERP I/O task to connect (connection now owned by I/O task) */

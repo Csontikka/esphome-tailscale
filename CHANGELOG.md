@@ -10,6 +10,11 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **`max_peers` above 16 silently left peers unreachable over TCP.** The YAML option accepted 1–64 and sized microlink's peer table accordingly, but the WireGuard peer table underneath was hardcoded to 16 — peers 17+ got discovery (Tailscale `ping` answered!) but never a WireGuard session, so every TCP connection to/from them timed out; which 16 peers won was MapResponse arrival-order lottery, reshuffled per boot. The WireGuard table is now sized from the same `max_peers` value (each slot costs ~0.9 KB). Found investigating [#27](https://github.com/Csontikka/esphome-tailscale/issues/27); the probable cause of [#20](https://github.com/Csontikka/esphome-tailscale/issues/20). The `Peer limit FULL` warning now reflects the real ceiling too.
+- **NVS-cached peers were not registered into WireGuard at boot.** The fast-boot peer cache pre-loads peers before the WireGuard interface exists (`wg_peer_index = -1`) and nothing re-registered them afterwards — until a full netmap happened to re-deliver a peer it stayed DISCO-visible but WireGuard-dead. A reconciliation pass now registers all cached peers right after the interface comes up.
+- **Headscale ≥ 0.26: all inbound TCP was dropped (v0.5.0 regression).** On the streamed-netmap path the WireGuard interface was brought up before the VPN IP was known, leaving the netif on a temporary address forever — inbound packets to the real tailnet IP were silently discarded while outbound traffic, DISCO and the control plane all kept working. Registration is now signalled only after the initial netmap is read, and the netif address self-heals every 10 s if the control plane ever re-assigns the IP.
+
 ## [0.5.1] — 2026-07-06
 
 ### Fixed
