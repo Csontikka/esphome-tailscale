@@ -136,6 +136,12 @@ extern "C" {
 #define ML_CTRL_WATCHDOG_MS             120000
 #define ML_CTRL_BACKOFF_MAX_MS          30000
 #define ML_CTRL_KEEPALIVE_MS            60000
+/* Stream-liveness watchdog: the mapSession sends a KeepAlive MapResponse
+ * roughly every minute (we request KeepAlive=true), so this allows ~5
+ * consecutive misses before declaring the session dead. Deliberately much
+ * longer than ML_CTRL_WATCHDOG_MS — that one guards the whole transport,
+ * this one guards the map stream specifically (#32). */
+#define ML_CTRL_STREAM_STALE_MS         300000
 
 /* Large tailnet buffer sizes (PSRAM-allocated, configurable via menuconfig) */
 #define ML_H2_BUFFER_SIZE       (CONFIG_ML_H2_BUFFER_SIZE_KB * 1024)
@@ -552,6 +558,17 @@ struct microlink_s {
      * marks us offline). The SD recorder samples now - ctrl_last_rx_ms as
      * coord_age, so a climbing value pinpoints exactly that silent stall. */
     volatile uint64_t ctrl_last_rx_ms;
+
+    /* ml_get_time_ms() of the most recent DATA frame received on the
+     * long-poll map stream (H2 stream 5) specifically — real MapResponses
+     * and the ~60 s mapSession keepalives, NOTHING else. Unlike
+     * ctrl_last_rx_ms this is NOT advanced by transport-level chatter
+     * (PONGs to our own 5 s PINGs, SETTINGS), so it keeps climbing when a
+     * front end / load balancer keeps the HTTP/2 connection alive while
+     * the server-side mapSession is already gone — the #32 failure: node
+     * "offline" in the admin console for hours, device thinks all is well.
+     * The COORD_LONG_POLL stream watchdog reconnects off this clock. */
+    volatile uint64_t ctrl_stream_rx_ms;
 
     /* Key expiry (parsed from MapResponse self-node) */
     int64_t key_expiry_epoch;       /* Unix epoch seconds, 0 = no expiry */

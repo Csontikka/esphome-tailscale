@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **The device now detects and recovers from a silently dead control-plane session** ([#32](https://github.com/Csontikka/esphome-tailscale/issues/32)). The control plane's front end can keep the HTTP/2 connection perfectly healthy (our keepalive PINGs keep being answered) while the server-side map session is already gone: the admin console shows the node *offline*, netmap updates stop, and new peers can't reach the device — while `VPN Connected` stays true and existing tunnels keep working, so nothing noticed. A new stream-liveness watchdog tracks actual map-stream traffic (real `MapResponse`s and the control plane's ~60 s keepalives, not transport chatter): after 5 minutes of stream silence the component logs `Control-plane map stream silent … reconnecting` and drives the normal reconnect path (~40 s full re-register). Verified live: a simulated dead map session behind a healthy TLS front end was detected at exactly 300 s and the device recovered by itself ~20 s after the control plane returned; `VPN Connect Count` increments on each such recovery, so automations can observe it.
+
 ## [0.5.3] — 2026-07-16
 
 ### Fixed
