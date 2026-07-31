@@ -117,6 +117,12 @@ extern "C" {
 #define ML_DISCO_TRUST_DURATION_MS      60000
 #define ML_DISCO_PING_TIMEOUT_MS        5000
 #define ML_DISCO_UPGRADE_INTERVAL_MS    15000
+
+/* Stop probing a peer whose WireGuard session has carried no traffic for this
+ * long. From tailscale/wgengine/magicsock/magicsock.go:4014
+ * (sessionActiveTimeout): the reference ends heartbeats for an idle session
+ * rather than probing peers it is not talking to. */
+#define ML_DISCO_SESSION_ACTIVE_MS      45000
 #define ML_DISCO_SESSION_ACTIVE_MS      45000
 
 /* STUN servers (Tailscale primary, Google fallback) */
