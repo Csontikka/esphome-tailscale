@@ -1604,6 +1604,9 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
  * State: FETCH_PEERS - Send MapRequest, parse MapResponse
  * ========================================================================== */
 
+/* Defined below with the long-poll reader; both map paths share one framed stream. */
+static void lp_acc_append(microlink_t *ml, const uint8_t *data, size_t len);
+
 static void parse_peers_from_map_response(microlink_t *ml, cJSON *root) {
     /* Try all field names used by Tailscale (copied from v1 lines 3176-3184):
      *   "Peers"        - Full peer list (initial Stream=false response)
@@ -2476,41 +2479,56 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
         ESP_LOGI(TAG, "MapResponse first %d bytes (hex): %s", dump, hexbuf);
     }
 
-    /* Check for length prefix (Tailscale binary framing: 4-byte big-endian length before JSON) */
+    /* Framed read, per tailscale/control/controlclient/direct.go:1294-1311. The reference
+     * uses ONE reader for both cases and says so explicitly:
+     *
+     *     // If allowStream, then the server will use an HTTP long poll to
+     *     // return incremental results. There is always one response right
+     *     // away, followed by a delay, and eventually others.
+     *     // If !allowStream, it'll still send the first result in exactly
+     *     // the same format before just closing the connection.
+     *     // We can use this same read loop either way.
+     *     var siz [4]byte; io.ReadFull(res.Body, siz[:])
+     *     size := binary.LittleEndian.Uint32(siz[:])
+     *     msg = append(msg[:0], make([]byte, size)...); io.ReadFull(res.Body, msg)
+     *
+     * So EVERY message on this path is 4-byte little-endian length + that many bytes,
+     * streamed or not. This previously sniffed for '{' in the first 8 bytes, probed BOTH
+     * endiannesses, clamped to the first message and then DISCARDED the remainder - which
+     * left the long-poll reader starting mid-message on its very first read.
+     *
+     * Now: read the length, parse exactly that message, and hand any trailing bytes to the
+     * long-poll accumulator so the two paths form one continuous framed stream. */
     char *parse_start = (char *)resp_buf;
     size_t parse_len = json_total;
 
-    /* Find the start of JSON - look for '{' in first 8 bytes */
-    int json_offset = -1;
-    for (int i = 0; i < 8 && i < (int)json_total; i++) {
-        if (resp_buf[i] == '{') {
-            json_offset = i;
-            break;
-        }
-    }
-    if (json_offset > 0) {
-        ESP_LOGI(TAG, "JSON starts at offset %d (skipping %d-byte prefix)", json_offset, json_offset);
-        parse_start += json_offset;
-        parse_len -= json_offset;
-    } else if (json_offset < 0) {
-        ESP_LOGW(TAG, "No '{' found in first 8 bytes of MapResponse!");
-    }
-
-    /* Stream mode: the buffer may already hold the START of the next
-     * length-prefixed message behind the first one — clamp parsing to the
-     * first message, or cJSON chokes on the trailing bytes. */
-    if (!send_request && json_offset == 4 && json_total > 4) {
-        uint32_t le = (uint32_t)resp_buf[0] | ((uint32_t)resp_buf[1] << 8) |
-                      ((uint32_t)resp_buf[2] << 16) | ((uint32_t)resp_buf[3] << 24);
-        uint32_t be = ((uint32_t)resp_buf[0] << 24) | ((uint32_t)resp_buf[1] << 16) |
-                      ((uint32_t)resp_buf[2] << 8) | (uint32_t)resp_buf[3];
-        uint32_t body = 0;
-        if (le >= 2 && le <= parse_len) body = le;
-        else if (be >= 2 && be <= parse_len) body = be;
-        if (body > 0 && body < parse_len) {
-            ESP_LOGI(TAG, "Clamping streamed MapResponse parse to first message (%lu of %lu bytes)",
-                     (unsigned long)body, (unsigned long)parse_len);
-            parse_len = body;
+    if (json_total >= 4) {
+        uint32_t size = (uint32_t)resp_buf[0] | ((uint32_t)resp_buf[1] << 8) |
+                        ((uint32_t)resp_buf[2] << 16) | ((uint32_t)resp_buf[3] << 24);
+        if (size >= 2 && (size_t)size <= json_total - 4) {
+            parse_start = (char *)resp_buf + 4;
+            parse_len = size;
+            size_t rest_off = 4 + (size_t)size;
+            if (rest_off < json_total) {
+                /* Tail belongs to the NEXT message - carry it, do not drop it. */
+                ESP_LOGI(TAG, "MapResponse: %lu-byte message, %u trailing byte(s) carried to long-poll",
+                         (unsigned long)size, (unsigned)(json_total - rest_off));
+                lp_acc_append(ml, resp_buf + rest_off, json_total - rest_off);
+            }
+        } else {
+            /* No usable prefix. Fall back to the old '{' sniff so a control plane that
+             * frames differently still works, but say so - it should not happen. */
+            int json_offset = -1;
+            for (int k = 0; k < 8 && k < (int)json_total; k++) {
+                if (resp_buf[k] == '{') { json_offset = k; break; }
+            }
+            ESP_LOGW(TAG, "MapResponse: no valid length prefix (size=%lu, have %u) - "
+                          "falling back to '{' sniff at offset %d",
+                     (unsigned long)size, (unsigned)json_total, json_offset);
+            if (json_offset > 0) {
+                parse_start += json_offset;
+                parse_len   -= json_offset;
+            }
         }
     }
 
