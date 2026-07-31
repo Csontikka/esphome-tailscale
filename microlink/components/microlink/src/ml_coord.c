@@ -535,6 +535,14 @@ static void ml_conn_close(microlink_t *ml) {
         ml_close_sock(ml->coord_sock);
         ml->coord_sock = -1;
     }
+
+    /* Drop any partially-received HTTP/2 frame and any partially-assembled
+     * map message. These belong to the session that just ended; carrying them
+     * into the next one prepends stale bytes to its FIRST framed message -
+     * which is the initial full netmap, the most valuable message on the
+     * stream. It would be lost to the length-prefix guard. */
+    ml->h2_acc_len = 0;
+    ml->lp_acc_len = 0;
 }
 
 /* ============================================================================
@@ -2934,7 +2942,11 @@ static void apply_long_poll_map(microlink_t *ml, cJSON *update_json) {
 static void lp_acc_append(microlink_t *ml, const uint8_t *data, size_t len) {
     if (!data || len == 0) return;
     if (!ml->lp_acc) {
-        ml->lp_acc = ml_psram_malloc(ML_JSON_BUFFER_SIZE);
+        /* +1: the drain loop NUL-terminates in place at ps[size], which is one
+         * past the last message byte. A message ending exactly at the buffer
+         * end would otherwise write one byte past the allocation, and `size`
+         * comes off the wire. */
+        ml->lp_acc = ml_psram_malloc(ML_JSON_BUFFER_SIZE + 1);
         ml->lp_acc_len = 0;
         if (!ml->lp_acc) return;
     }
@@ -3027,6 +3039,18 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
                              (frame_buf[pos + 7] << 8) | frame_buf[pos + 8];
         pos += 9;
 
+        /* A 24-bit length field can claim up to 16 MB, which can never be
+         * satisfied from a 64 KB read buffer: we would carry forever, shrink
+         * the read window to zero and stall until the watchdog fires. Treat an
+         * unsatisfiable frame as a protocol error. */
+        if (f_len > ML_H2_MAX_FRAME_LEN) {
+            ESP_LOGE(TAG, "H2 frame length %lu exceeds %d - protocol error, dropping session state",
+                     (unsigned long)f_len, ML_H2_MAX_FRAME_LEN);
+            ml->h2_acc_len = 0;
+            ml->lp_acc_len = 0;
+            break;
+        }
+
         if (pos + (int)f_len > frame_len) {
             /* Partial frame: stash the header AND the bytes we do have, so the
              * next read completes it. Dropping it here is what desynchronised
@@ -3076,6 +3100,18 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
             noise_send(ml, noise, settings_ack, sizeof(settings_ack));
         }
         pos += f_len;
+    }
+
+    /* A read can also end mid-HEADER (1-8 bytes of the 9-byte prefix). The loop
+     * above stops on `pos + 9 <= frame_len`, so those bytes would be dropped and
+     * desynchronise the stream exactly as a split payload does. Carry them too. */
+    if (pos < frame_len && ml->h2_acc_len == 0) {
+        size_t left = (size_t)frame_len - (size_t)pos;
+        if (!ml->h2_acc) ml->h2_acc = ml_psram_malloc(65536);
+        if (ml->h2_acc && left <= 65536) {
+            memcpy(ml->h2_acc, frame_buf + pos, left);
+            ml->h2_acc_len = left;
+        }
     }
 
     /* Send HTTP/2 WINDOW_UPDATE to replenish flow control after receiving DATA.
