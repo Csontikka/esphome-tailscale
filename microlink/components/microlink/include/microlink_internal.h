@@ -375,6 +375,12 @@ typedef struct {
 #define ML_DERP_SWITCH_MIN_DIFF_MS   10     /* preferredDERPAbsoluteDiff */
 #define ML_DERP_SWITCH_RATIO_NUM     2      /* new must be <= old * 2/3 */
 #define ML_DERP_SWITCH_RATIO_DEN     3
+
+/* A region is still considered reachable if we have heard from it by a
+ * NON-STUN route this recently. tailscale/net/netcheck/netcheck.go:1381
+ * (PreferredDERPFrameTime). Without this a working region that loses one round
+ * of STUN probes reads as dead, and home moves with no hysteresis at all. */
+#define ML_DERP_PREFERRED_FRAME_MS   8000
 #define ML_MAX_DERP_NODES       4
 
 typedef struct {

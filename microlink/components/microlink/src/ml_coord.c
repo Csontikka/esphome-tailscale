@@ -2137,6 +2137,27 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
             uint16_t prev_rtt = (prev > 0) ? ml_netcheck_best_recent_rtt(ml, prev) : 0;
             bool prev_reachable = (prev > 0 && prev_rtt > 0);
 
+            /* A lost STUN probe is not proof a region is down. The reference
+             * also treats the old region as alive if it has heard from it by a
+             * non-STUN route within PreferredDERPFrameTime (netcheck.go:1471-1484):
+             *
+             *     heardFromOldRegionRecently = prevRegionLastHeard.After(rs.start)
+             *       || prevRegionLastHeard.After(now.Add(-PreferredDERPFrameTime))
+             *     oldRegionIsAccessible := oldRegionCurLatency != 0 || heardFromOldRegionRecently
+             *
+             * Our equivalent: an established DERP session to that same region
+             * that has received traffic recently. This matters because the
+             * !prev_reachable path below moves home with NO hysteresis. */
+            if (!prev_reachable && prev > 0 && prev == ml->derp_home_region &&
+                ml->derp.connected && ml->derp.last_recv_ms != 0) {
+                uint64_t since_rx = ml_get_time_ms() - ml->derp.last_recv_ms;
+                if (since_rx <= ML_DERP_PREFERRED_FRAME_MS) {
+                    ESP_LOGI(TAG, "Region %u missed STUN but its DERP session had traffic %llums ago - still alive",
+                             prev, (unsigned long long)since_rx);
+                    prev_reachable = true;
+                }
+            }
+
             if (!prev_reachable || prev == 0) {
                 /* No usable current home - take the best we can see. */
                 if (best != prev) {
