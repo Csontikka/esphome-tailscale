@@ -2986,7 +2986,25 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     uint8_t *frame_buf = ml_psram_malloc(65536);
     if (!frame_buf) return 0;
 
-    int frame_len = noise_recv(ml, noise, frame_buf, 65536);
+    /* Prepend bytes left over from the previous read. An H2 DATA frame whose
+     * payload straddles a read boundary used to be dropped outright by the
+     * `pos + f_len > frame_len` break below, so its head was lost and every
+     * byte after it was mis-parsed as the start of a new message. */
+    size_t carry = 0;
+    if (ml->h2_acc && ml->h2_acc_len > 0) {
+        carry = ml->h2_acc_len;
+        if (carry > 65536) carry = 0;          /* cannot happen; be safe */
+        if (carry) memcpy(frame_buf, ml->h2_acc, carry);
+        ml->h2_acc_len = 0;
+    }
+
+    int rcvd = noise_recv(ml, noise, frame_buf + carry, 65536 - carry);
+    int frame_len = (rcvd > 0) ? rcvd + (int)carry : rcvd;
+
+    if (rcvd <= 0 && carry > 0) {
+        /* Nothing new this time - keep what we had for the next read. */
+        if (ml->h2_acc) { memcpy(ml->h2_acc, frame_buf, carry); ml->h2_acc_len = carry; }
+    }
 
     if (frame_len <= 0) {
         free(frame_buf);
@@ -3009,7 +3027,23 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
                              (frame_buf[pos + 7] << 8) | frame_buf[pos + 8];
         pos += 9;
 
-        if (pos + (int)f_len > frame_len) break;
+        if (pos + (int)f_len > frame_len) {
+            /* Partial frame: stash the header AND the bytes we do have, so the
+             * next read completes it. Dropping it here is what desynchronised
+             * the message reader - see the h2_acc comment above. */
+            size_t start = (size_t)pos - 9;          /* include the 9-byte header */
+            size_t left  = (size_t)frame_len - start;
+            if (!ml->h2_acc) ml->h2_acc = ml_psram_malloc(65536);
+            if (ml->h2_acc && left <= 65536) {
+                memcpy(ml->h2_acc, frame_buf + start, left);
+                ml->h2_acc_len = left;
+            } else {
+                ESP_LOGW(TAG, "H2: cannot carry %u-byte partial frame - dropping",
+                         (unsigned)left);
+                if (ml->h2_acc) ml->h2_acc_len = 0;
+            }
+            break;
+        }
 
         if (f_type == 0x00) {  /* DATA frame */
             total_data_bytes += f_len;
