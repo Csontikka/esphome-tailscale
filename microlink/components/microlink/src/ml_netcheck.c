@@ -81,6 +81,20 @@ static uint32_t resolve_v4(const char *hostname) {
 /* Rotate derp_rtt_hist and store the netcheck that just completed in slot 0. */
 void ml_netcheck_record_history(microlink_t *ml) {
     if (!ml) return;
+
+    /* Invalidate the history if the DERPMap's region set changed - the slots
+     * are positional, so a reorder would misattribute latencies. */
+    uint32_t sig = 2166136261u;
+    for (int r = 0; r < ml->derp_region_count; r++) {
+        sig = (sig ^ ml->derp_regions[r].region_id) * 16777619u;
+    }
+    if (sig != ml->derp_region_sig) {
+        if (ml->derp_region_sig != 0) {
+            ESP_LOGI(TAG, "DERPMap region set changed - discarding latency history");
+        }
+        memset(ml->derp_rtt_hist, 0, sizeof(ml->derp_rtt_hist));
+        ml->derp_region_sig = sig;
+    }
     for (int h = ML_DERP_RTT_HISTORY - 1; h > 0; h--) {
         memcpy(ml->derp_rtt_hist[h], ml->derp_rtt_hist[h - 1],
                sizeof(ml->derp_rtt_hist[0]));

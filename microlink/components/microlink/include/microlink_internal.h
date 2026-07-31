@@ -566,6 +566,12 @@ struct microlink_s {
      * Slot 0 is the newest; the ring is rotated on each netcheck. */
     uint16_t derp_rtt_hist[ML_DERP_RTT_HISTORY][ML_MAX_DERP_REGIONS];
 
+    /* History slots are indexed by position in derp_regions[], so they are only
+     * meaningful while that array's contents are unchanged. Checksum the region
+     * IDs and discard the history whenever the DERPMap changes, rather than
+     * silently attributing one region's latency to another. */
+    uint32_t derp_region_sig;
+
     /* The region WE have chosen as home, from our own measurements. This is
      * what gets reported to the control plane in NetInfo.PreferredDERP. */
     uint16_t derp_preferred_region;
