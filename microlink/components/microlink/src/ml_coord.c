@@ -1261,6 +1261,7 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
     cJSON *hostinfo = cJSON_CreateObject();
     const char *dev_name = (ml->config.device_name && ml->config.device_name[0]) ? ml->config.device_name : microlink_default_device_name();
     cJSON_AddStringToObject(hostinfo, "Hostname", dev_name);
+    cJSON_AddStringToObject(hostinfo, "IPNVersion", ML_IPN_VERSION);
     cJSON_AddStringToObject(hostinfo, "OS", "linux");
     cJSON_AddStringToObject(hostinfo, "OSVersion", "ESP-IDF");
     cJSON_AddStringToObject(hostinfo, "GoArch", "arm");
@@ -2194,6 +2195,7 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
     cJSON *hostinfo = cJSON_CreateObject();
     const char *dev_name = (ml->config.device_name && ml->config.device_name[0]) ? ml->config.device_name : microlink_default_device_name();
     cJSON_AddStringToObject(hostinfo, "Hostname", dev_name);
+    cJSON_AddStringToObject(hostinfo, "IPNVersion", ML_IPN_VERSION);
     cJSON_AddStringToObject(hostinfo, "OS", "linux");
     cJSON_AddStringToObject(hostinfo, "OSVersion", "ESP-IDF");
     cJSON_AddStringToObject(hostinfo, "GoArch", "arm");
