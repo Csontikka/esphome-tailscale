@@ -21,6 +21,7 @@
  *            tailscale/control/controlclient/direct.go
  */
 
+#include <ctype.h>
 #include "microlink_internal.h"
 #include "ml_x25519.h"
 #include "esp_log.h"
@@ -2906,6 +2907,30 @@ static void apply_long_poll_map(microlink_t *ml, cJSON *update_json) {
     }
 }
 
+/* Append one stream-5 DATA payload to the long-poll reassembly buffer.
+ * MUST be called for EVERY stream-5 DATA frame in a read, not just the last one:
+ * a single read can carry several, and keeping only the last leaves the
+ * accumulator starting mid-message, which then mis-reads JSON bytes as a length
+ * prefix. (Observed on hardware: "implausible message size 808333626" - that is
+ * the ASCII ":1.0" read as a little-endian uint32.) */
+static void lp_acc_append(microlink_t *ml, const uint8_t *data, size_t len) {
+    if (!data || len == 0) return;
+    if (!ml->lp_acc) {
+        ml->lp_acc = ml_psram_malloc(ML_JSON_BUFFER_SIZE);
+        ml->lp_acc_len = 0;
+        if (!ml->lp_acc) return;
+    }
+    if (ml->lp_acc_len + len > ML_JSON_BUFFER_SIZE) {
+        ESP_LOGW(TAG, "long-poll accumulator would overflow (%u + %u) - resetting",
+                 (unsigned)ml->lp_acc_len, (unsigned)len);
+        ml->lp_acc_len = 0;
+    }
+    if (ml->lp_acc_len + len <= ML_JSON_BUFFER_SIZE) {
+        memcpy(ml->lp_acc + ml->lp_acc_len, data, len);
+        ml->lp_acc_len += len;
+    }
+}
+
 static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     /* Use select() to check if data is available before blocking in recv */
     fd_set readfds;
@@ -2954,8 +2979,6 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     }
 
     /* Extract DATA frame payload from H2 frames, track flow control */
-    uint8_t *json_data = NULL;
-    size_t json_data_len = 0;
     uint32_t total_data_bytes = 0;
     uint32_t data_stream_id = 0;
     int pos = 0;
@@ -2979,10 +3002,8 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
                  * stream-liveness clock the COORD_LONG_POLL watchdog reads. */
                 ml->ctrl_stream_rx_ms = ml_get_time_ms();
                 data_stream_id = f_stream;
-                if (f_len > 0) {
-                    json_data = frame_buf + pos;
-                    json_data_len = f_len;
-                }
+                /* Append EVERY stream-5 DATA frame - see lp_acc_append(). */
+                lp_acc_append(ml, frame_buf + pos, f_len);
             } else if (f_len > 0) {
                 /* Endpoint update response (stream 7+) — discard body */
                 ESP_LOGD(TAG, "H2 stream %lu DATA: %lu bytes (discarded)",
@@ -3033,24 +3054,6 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
      * SILENTLY - with ctrl_stream_rx_ms already stamped above, so every liveness signal stayed green
      * while netmap updates were lost. Compression is disabled (Compress: ""), so responses arrive at
      * full size and spanning is the normal case for anything but a keepalive. */
-    if (json_data && json_data_len > 0) {
-        if (!ml->lp_acc) {
-            ml->lp_acc = ml_psram_malloc(ML_JSON_BUFFER_SIZE);
-            ml->lp_acc_len = 0;
-        }
-        if (ml->lp_acc) {
-            if (ml->lp_acc_len + json_data_len > ML_JSON_BUFFER_SIZE) {
-                ESP_LOGW(TAG, "long-poll accumulator would overflow (%u + %u) - resetting",
-                         (unsigned)ml->lp_acc_len, (unsigned)json_data_len);
-                ml->lp_acc_len = 0;
-            }
-            if (ml->lp_acc_len + json_data_len <= ML_JSON_BUFFER_SIZE) {
-                memcpy(ml->lp_acc + ml->lp_acc_len, json_data, json_data_len);
-                ml->lp_acc_len += json_data_len;
-            }
-        }
-    }
-
     if (ml->lp_acc && ml->lp_acc_len >= 4) {
         size_t consumed = 0;
         for (;;) {
@@ -3062,8 +3065,12 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
             /* A size we could never satisfy means we are out of frame. Losing one update is
              * recoverable; a permanently stuck accumulator is not. */
             if (size == 0 || size > ML_JSON_BUFFER_SIZE) {
-                ESP_LOGW(TAG, "long-poll: implausible message size %lu - discarding %u buffered bytes",
-                         (unsigned long)size, (unsigned)ml->lp_acc_len);
+                ESP_LOGW(TAG, "long-poll: implausible message size %lu ('%c%c%c%c') - "
+                              "discarding %u buffered bytes",
+                         (unsigned long)size,
+                         isprint(m[0]) ? m[0] : '.', isprint(m[1]) ? m[1] : '.',
+                         isprint(m[2]) ? m[2] : '.', isprint(m[3]) ? m[3] : '.',
+                         (unsigned)ml->lp_acc_len);
                 ml->lp_acc_len = 0;
                 consumed = 0;
                 break;
