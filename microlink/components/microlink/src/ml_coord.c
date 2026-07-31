@@ -2869,6 +2869,43 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
 }
 
 /* Try to read one incremental MapResponse update (non-blocking) */
+/* Apply one fully-decoded MapResponse from the long-poll stream.
+ * Extracted from poll_map_update so the caller can drive it once per COMPLETE message rather than
+ * once per socket read. See the reassembly note on microlink_t::lp_acc. */
+static void apply_long_poll_map(microlink_t *ml, cJSON *update_json) {
+    ESP_LOGI(TAG, "Long-poll MapResponse update received");
+
+    /* Update VPN IP if present */
+    cJSON *node = cJSON_GetObjectItem(update_json, "Node");
+    if (node) {
+        cJSON *addresses = cJSON_GetObjectItem(node, "Addresses");
+        if (addresses && cJSON_GetArraySize(addresses) > 0) {
+            const char *addr = cJSON_GetArrayItem(addresses, 0)->valuestring;
+            if (addr) {
+                unsigned a, b, c, d;
+                if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+                    uint32_t new_ip = (a << 24) | (b << 16) | (c << 8) | d;
+                    if (new_ip != ml->vpn_ip) {
+                        ml->vpn_ip = new_ip;
+                        ESP_LOGI(TAG, "VPN IP updated via long-poll");
+                    }
+                }
+            }
+        }
+    }
+
+    /* Parse peer updates */
+    parse_peers_from_map_response(ml, update_json);
+
+    /* The DERPMap can arrive on the stream too - Headscale >= 0.26 delivers the ENTIRE initial
+     * netmap here (the non-streaming fetch returns an empty body, see do_map_exchange). Parse it
+     * and kick the DERP I/O task if it has not connected yet. */
+    if (parse_derp_map_from_response(ml, update_json) && !ml->derp.connected) {
+        ESP_LOGI(TAG, "DERPMap arrived via long-poll - signaling DERP connect");
+        xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
+    }
+}
+
 static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     /* Use select() to check if data is available before blocking in recv */
     fd_set readfds;
@@ -2983,61 +3020,73 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
         noise_send(ml, noise, wu_buf, wu_len);
     }
 
-    if (!json_data || json_data_len == 0) {
-        /* Keepalive, SETTINGS, or PING frame - not an error */
-        free(frame_buf);
-        return 1;  /* Got data, reset watchdog */
-    }
-
-    /* Skip 4-byte length prefix if present */
-    char *parse_start = (char *)json_data;
-    size_t parse_len = json_data_len;
-    if (parse_len > 4 && parse_start[4] == '{') {
-        parse_start += 4;
-        parse_len -= 4;
-    }
-
-    char saved = parse_start[parse_len];
-    parse_start[parse_len] = '\0';
-
-    cJSON *update_json = cJSON_Parse(parse_start);
-    parse_start[parse_len] = saved;
-
-    if (update_json) {
-        ESP_LOGI(TAG, "Long-poll MapResponse update received");
-
-        /* Update VPN IP if present */
-        cJSON *node = cJSON_GetObjectItem(update_json, "Node");
-        if (node) {
-            cJSON *addresses = cJSON_GetObjectItem(node, "Addresses");
-            if (addresses && cJSON_GetArraySize(addresses) > 0) {
-                const char *addr = cJSON_GetArrayItem(addresses, 0)->valuestring;
-                if (addr) {
-                    unsigned a, b, c, d;
-                    if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
-                        uint32_t new_ip = (a << 24) | (b << 16) | (c << 8) | d;
-                        if (new_ip != ml->vpn_ip) {
-                            ml->vpn_ip = new_ip;
-                            ESP_LOGI(TAG, "VPN IP updated via long-poll");
-                        }
-                    }
-                }
+    /* ---- Reassemble and drain complete messages ---------------------------------------------
+     * Framing per tailscale/control/controlclient/direct.go:1304-1311:
+     *     var siz [4]byte; io.ReadFull(body, siz[:])
+     *     size := binary.LittleEndian.Uint32(siz[:])
+     *     msg := make([]byte, size); io.ReadFull(body, msg)
+     * i.e. a 4-byte LITTLE-ENDIAN length followed by exactly that many bytes. The reference is a
+     * framed reader by construction and cannot half-read a message; this makes ours one too.
+     *
+     * Previously this function pointed at whichever stream-5 DATA frame happened to be last in one
+     * read, so any MapResponse spanning more than one frame failed cJSON_Parse and was dropped
+     * SILENTLY - with ctrl_stream_rx_ms already stamped above, so every liveness signal stayed green
+     * while netmap updates were lost. Compression is disabled (Compress: ""), so responses arrive at
+     * full size and spanning is the normal case for anything but a keepalive. */
+    if (json_data && json_data_len > 0) {
+        if (!ml->lp_acc) {
+            ml->lp_acc = ml_psram_malloc(ML_JSON_BUFFER_SIZE);
+            ml->lp_acc_len = 0;
+        }
+        if (ml->lp_acc) {
+            if (ml->lp_acc_len + json_data_len > ML_JSON_BUFFER_SIZE) {
+                ESP_LOGW(TAG, "long-poll accumulator would overflow (%u + %u) - resetting",
+                         (unsigned)ml->lp_acc_len, (unsigned)json_data_len);
+                ml->lp_acc_len = 0;
+            }
+            if (ml->lp_acc_len + json_data_len <= ML_JSON_BUFFER_SIZE) {
+                memcpy(ml->lp_acc + ml->lp_acc_len, json_data, json_data_len);
+                ml->lp_acc_len += json_data_len;
             }
         }
+    }
 
-        /* Parse peer updates */
-        parse_peers_from_map_response(ml, update_json);
+    if (ml->lp_acc && ml->lp_acc_len >= 4) {
+        size_t consumed = 0;
+        for (;;) {
+            size_t avail = ml->lp_acc_len - consumed;
+            if (avail < 4) break;
+            uint8_t *m = ml->lp_acc + consumed;
+            uint32_t size = (uint32_t)m[0] | ((uint32_t)m[1] << 8) |
+                            ((uint32_t)m[2] << 16) | ((uint32_t)m[3] << 24);
+            /* A size we could never satisfy means we are out of frame. Losing one update is
+             * recoverable; a permanently stuck accumulator is not. */
+            if (size == 0 || size > ML_JSON_BUFFER_SIZE) {
+                ESP_LOGW(TAG, "long-poll: implausible message size %lu - discarding %u buffered bytes",
+                         (unsigned long)size, (unsigned)ml->lp_acc_len);
+                ml->lp_acc_len = 0;
+                consumed = 0;
+                break;
+            }
+            if (avail < 4 + (size_t)size) break;   /* incomplete - keep for the next read */
 
-        /* The DERPMap can arrive on the stream too — Headscale >= 0.26
-         * delivers the ENTIRE initial netmap here (the non-streaming fetch
-         * returns an empty body, see do_map_exchange).  Parse it and kick
-         * the DERP I/O task if it has not connected yet. */
-        if (parse_derp_map_from_response(ml, update_json) && !ml->derp.connected) {
-            ESP_LOGI(TAG, "DERPMap arrived via long-poll — signaling DERP connect");
-            xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
+            char *ps = (char *)m + 4;
+            char saved = ps[size];
+            ps[size] = '\0';
+            cJSON *update_json = cJSON_Parse(ps);
+            ps[size] = saved;
+            if (update_json) {
+                apply_long_poll_map(ml, update_json);
+                cJSON_Delete(update_json);
+            } else {
+                ESP_LOGW(TAG, "long-poll: %lu-byte message failed to parse", (unsigned long)size);
+            }
+            consumed += 4 + size;
         }
-
-        cJSON_Delete(update_json);
+        if (consumed > 0 && consumed <= ml->lp_acc_len) {
+            memmove(ml->lp_acc, ml->lp_acc + consumed, ml->lp_acc_len - consumed);
+            ml->lp_acc_len -= consumed;
+        }
     }
 
     free(frame_buf);
