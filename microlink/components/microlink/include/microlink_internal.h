@@ -576,6 +576,11 @@ struct microlink_s {
      * what gets reported to the control plane in NetInfo.PreferredDERP. */
     uint16_t derp_preferred_region;
 
+    /* Set when derp_preferred_region changes: the control plane must be told
+     * promptly, because until it is, peers are still being advertised the old
+     * home region and cannot reach us. */
+    bool derp_home_pending_report;
+
     /* ml_get_time_ms() value when state transitioned to CONNECTED. 0 means
      * not currently connected. Used for the GUI tailnet uptime row. */
     uint64_t connected_at_ms;

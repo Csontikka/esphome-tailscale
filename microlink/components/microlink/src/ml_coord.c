@@ -2132,6 +2132,35 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
         uint16_t best = ml_netcheck_best_recent_region(ml);
         if (best == 0) best = measured;
 
+        /* Do NOT move an established home region while we have no live long
+         * poll to the control plane. Peers reach a node at the HomeDERP the
+         * control plane advertises for it, so a home change we cannot report
+         * does not improve connectivity - it removes it, and the node becomes
+         * unreachable to every peer until the advertisement propagates. On a
+         * relay-only device that is the difference between a latency win and
+         * losing the device entirely.
+         *
+         * The reference refuses the same way (wgengine/magicsock/derp.go:177-190):
+         *
+         *     connectedToControl = c.health.GetInPollNetMap()
+         *     if !connectedToControl && !force {
+         *         if myDerp != 0 { return myDerp }   // keep what we have
+         *         // else fall through: any DERP beats none
+         *     }
+         *
+         * GetInPollNetMap is "the client has an open HTTP long poll to the
+         * control plane" (health/health.go:770-779); ctrl_stream_rx_ms is our
+         * equivalent, fed by every frame on the map stream. Having NO home at
+         * all is the documented exception - any relay beats none. */
+        bool in_map_poll = (ml->ctrl_stream_rx_ms != 0) &&
+                           ((ml_get_time_ms() - ml->ctrl_stream_rx_ms) < ML_CTRL_STREAM_STALE_MS);
+        if (!in_map_poll && prev != 0 && best != prev) {
+            ESP_LOGW(TAG, "Home DERP would change %u -> %u, but the control-plane map "
+                          "stream is not live - keeping %u so peers can still reach us",
+                     prev, best, prev);
+            best = prev;
+        }
+
         if (best > 0) {
             uint16_t best_rtt = ml_netcheck_best_recent_rtt(ml, best);
             uint16_t prev_rtt = (prev > 0) ? ml_netcheck_best_recent_rtt(ml, prev) : 0;
@@ -2185,6 +2214,12 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
                              big_enough ? "not proportionally better" : "margin too small");
                     ml->derp_preferred_region = prev;
                 }
+            }
+            if (ml->derp_preferred_region != prev && ml->derp_preferred_region != 0) {
+                /* Report the new region immediately. Until the control plane
+                 * has it, peers are still being told to reach us at the old
+                 * one, so every second of delay is a second of unreachability. */
+                ml->derp_home_pending_report = true;
             }
             ml->derp_home_region = ml->derp_preferred_region;
         }
@@ -3463,6 +3498,21 @@ void ml_coord_task(void *arg) {
                         do_send_endpoint_update(ml, &noise);
                     }
                     free(stun_pkt.data);
+                }
+
+                /* A home-region change must reach the control plane at once:
+                 * peers are told where to find us via Node.HomeDERP, which
+                 * control derives from the PreferredDERP we report. Until this
+                 * lands, every peer is still dialling the old region. */
+                if (ml->derp_home_pending_report) {
+                    ml->derp_home_pending_report = false;
+                    ESP_LOGW(TAG, "Home DERP changed to %u - reporting to control plane now",
+                             ml->derp_preferred_region);
+                    if (do_send_endpoint_update(ml, &noise) < 0) {
+                        /* Could not tell control. Try again next iteration
+                         * rather than leaving peers pointed at the old region. */
+                        ml->derp_home_pending_report = true;
+                    }
                 }
 
                 /* STUN retry logic: 3 attempts per server, 2s apart, then fallback */
