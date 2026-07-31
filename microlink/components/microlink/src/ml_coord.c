@@ -2109,16 +2109,31 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
     }
     ESP_LOGI(TAG, "DERPMap: parsed %d regions", ml->derp_region_count);
 
-    /* Netcheck: measure RTT to every known DERP region via STUN.
-     * Whether we then override the control-plane HomeDERP is gated
-     * by two policy knobs (microlink_config_t):
-     *   netcheck_override_enabled  — kill switch
-     *   netcheck_override_threshold_ms — hysteresis: only switch
-     *       when the measured region beats the control-plane region
-     *       by at least N ms (avoids ping-ponging between regions
-     *       with near-identical latency, e.g. Frankfurt 100 ms vs
-     *       Sao Paulo 86 ms with a 50 ms threshold = stay on FFM). */
-    if (ml->derp_region_count > 0) {
+    /* Netcheck: measure RTT to every known DERP region via STUN, then choose
+     * our own home region from the result.
+     *
+     * netcheck_override_enabled still gates the CHOOSING, as it always has -
+     * with it false we keep the configured/default region. What is no longer
+     * gated is the REPORTING: NetInfo.PreferredDERP now always carries the
+     * region we are actually using rather than the control plane's echo of it,
+     * because that echo loop is a bug in either mode. Leaving it in place with
+     * the override off would still pin every device to whatever region it
+     * started on, which is what the flag's users are not asking for.
+     *
+     * netcheck_override_threshold_ms is superseded by the reference's two-part
+     * margin (absolute >= ML_DERP_SWITCH_MIN_DIFF_MS AND proportional <= 2/3),
+     * which is strictly more conservative than a single absolute threshold. */
+    if (ml->derp_region_count > 0 && !ml->config.netcheck_override_enabled &&
+        ml->derp_preferred_region == 0) {
+        /* Selection disabled: report the region we are actually using, so the
+         * echo loop is still broken even when we are not choosing. */
+        ml->derp_preferred_region = ml->derp_home_region ? ml->derp_home_region
+                                                         : ml->derp_region_default;
+        ESP_LOGI(TAG, "Netcheck selection disabled by config - reporting region %u",
+                 ml->derp_preferred_region);
+    }
+
+    if (ml->derp_region_count > 0 && ml->config.netcheck_override_enabled) {
         uint16_t measured = ml_netcheck_pick_best_derp(ml);
 
         /* Fold this netcheck into the best-recent history and select on that,

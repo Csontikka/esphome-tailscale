@@ -121,8 +121,10 @@ extern "C" {
 /* Stop probing a peer whose WireGuard session has carried no traffic for this
  * long. From tailscale/wgengine/magicsock/magicsock.go:4014
  * (sessionActiveTimeout): the reference ends heartbeats for an idle session
- * rather than probing peers it is not talking to. */
-#define ML_DISCO_SESSION_ACTIVE_MS      45000
+ * rather than probing peers it is not talking to.
+ *
+ * This constant already existed here, defined and never used - like
+ * derp.last_recv_ms before the liveness watchdog. Now wired up. */
 #define ML_DISCO_SESSION_ACTIVE_MS      45000
 
 /* STUN servers (Tailscale primary, Google fallback) */
