@@ -339,6 +339,11 @@ typedef struct {
      * (e.g. both ends behind the same NAT with no hairpin, or VLAN-isolated). */
     uint64_t peer_added_ms;        /* When this peer entered our state */
     bool derp_fallback_active;     /* Endpoint forced to DERP via update_endpoint(0) */
+
+    /* Set when a relay reports PeerGone for this peer: it has no path there,
+     * so driving handshakes through it is waste. Suppress retries until this
+     * time, then try again in case the peer has come back. */
+    uint64_t derp_gone_until_ms;
     uint64_t last_derp_attempt_ms; /* Last wireguardif_connect_derp() retry, for periodic re-fire */
 
     /* Exit-node advertisement (Phase 1.5e): true if this peer carries
@@ -381,6 +386,11 @@ typedef struct {
  * (PreferredDERPFrameTime). Without this a working region that loses one round
  * of STUN probes reads as dead, and home moves with no hysteresis at all. */
 #define ML_DERP_PREFERRED_FRAME_MS   8000
+
+/* How long to stop driving WireGuard handshakes through a relay that has told
+ * us it has no path to the peer (DERP PeerGone). Long enough to stop the waste,
+ * short enough that a peer coming back is picked up quickly. */
+#define ML_DERP_GONE_BACKOFF_MS      60000
 #define ML_MAX_DERP_NODES       4
 
 typedef struct {

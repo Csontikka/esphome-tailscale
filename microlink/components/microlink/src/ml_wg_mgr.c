@@ -1151,6 +1151,10 @@ static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
              * we'll switch back to direct (handled by wireguardif_update_endpoint
              * a few lines below with the new pkt->src_ip:src_port). */
             p->derp_fallback_active = false;
+            /* We have heard from this peer, so whatever a relay told us earlier
+             * is stale - resume normal behaviour immediately rather than
+             * waiting out the PeerGone backoff. */
+            p->derp_gone_until_ms = 0;
 
             /* Update WireGuard endpoint to direct path.
              * Always update the stored endpoint. Only force a handshake if we
@@ -1806,6 +1810,12 @@ static void disco_periodic_probes(microlink_t *ml) {
             bool first_attempt = !p->derp_fallback_active;
             bool attempt_due = (p->last_derp_attempt_ms == 0) ||
                                (now - p->last_derp_attempt_ms > 30000);
+            /* A relay that has reported PeerGone for this peer cannot deliver
+             * to it; retrying every 30 s achieves nothing but load on the relay
+             * and the device. */
+            if (p->derp_gone_until_ms != 0 && now < p->derp_gone_until_ms) {
+                attempt_due = false;
+            }
             if (up != ERR_OK && attempt_due) {
                 wireguardif_connect_derp(netif, (u8_t)p->wg_peer_index);
                 p->derp_fallback_active = true;
