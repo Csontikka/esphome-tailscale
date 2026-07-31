@@ -2995,7 +2995,14 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     struct timeval tv_recv = { .tv_sec = 2, .tv_usec = 0 };
     ml_setsockopt(ml_conn_sockfd(ml), SOL_SOCKET, SO_RCVTIMEO, &tv_recv, sizeof(tv_recv));
 
-    uint8_t *frame_buf = ml_psram_malloc(65536);
+    /* 65536 for the read itself, plus room for a carried partial frame in front
+     * of it. noise_recv() abandons a frame mid-stream if its plaintext exceeds
+     * the window it was given (it has already consumed the Noise header by
+     * then), so the window must never shrink below the largest plaintext the
+     * peer can send. Sizing the buffer this way keeps the recv window at a full
+     * 65536 no matter how much is carried. */
+    const size_t frame_cap = 65536 + ML_H2_MAX_FRAME_LEN + 9;
+    uint8_t *frame_buf = ml_psram_malloc(frame_cap);
     if (!frame_buf) return 0;
 
     /* Prepend bytes left over from the previous read. An H2 DATA frame whose
@@ -3005,12 +3012,12 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     size_t carry = 0;
     if (ml->h2_acc && ml->h2_acc_len > 0) {
         carry = ml->h2_acc_len;
-        if (carry > 65536) carry = 0;          /* cannot happen; be safe */
+        if (carry > frame_cap) carry = 0;      /* cannot happen; be safe */
         if (carry) memcpy(frame_buf, ml->h2_acc, carry);
         ml->h2_acc_len = 0;
     }
 
-    int rcvd = noise_recv(ml, noise, frame_buf + carry, 65536 - carry);
+    int rcvd = noise_recv(ml, noise, frame_buf + carry, (int)(frame_cap - carry));
     int frame_len = (rcvd > 0) ? rcvd + (int)carry : rcvd;
 
     if (rcvd <= 0 && carry > 0) {
@@ -3027,6 +3034,7 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     }
 
     /* Extract DATA frame payload from H2 frames, track flow control */
+    bool proto_err = false;
     uint32_t total_data_bytes = 0;
     uint32_t data_stream_id = 0;
     int pos = 0;
@@ -3044,10 +3052,17 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
          * the read window to zero and stall until the watchdog fires. Treat an
          * unsatisfiable frame as a protocol error. */
         if (f_len > ML_H2_MAX_FRAME_LEN) {
-            ESP_LOGE(TAG, "H2 frame length %lu exceeds %d - protocol error, dropping session state",
-                     (unsigned long)f_len, ML_H2_MAX_FRAME_LEN);
+            ESP_LOGE(TAG, "H2 frame length %lu exceeds %d - framing is unrecoverable, "
+                          "dropping the session", (unsigned long)f_len, ML_H2_MAX_FRAME_LEN);
             ml->h2_acc_len = 0;
             ml->lp_acc_len = 0;
+            /* Do NOT fall through to the trailing-bytes carry below: `pos` is
+             * already past this frame's header and its payload is still in the
+             * buffer, so carrying it would re-inject the very bytes we just
+             * rejected and desync every subsequent read. Once H2 framing is
+             * lost there is no way back within the session - close it and let
+             * the coord state machine reconnect. */
+            proto_err = true;
             break;
         }
 
@@ -3105,7 +3120,7 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     /* A read can also end mid-HEADER (1-8 bytes of the 9-byte prefix). The loop
      * above stops on `pos + 9 <= frame_len`, so those bytes would be dropped and
      * desynchronise the stream exactly as a split payload does. Carry them too. */
-    if (pos < frame_len && ml->h2_acc_len == 0) {
+    if (!proto_err && pos < frame_len && ml->h2_acc_len == 0) {
         size_t left = (size_t)frame_len - (size_t)pos;
         if (!ml->h2_acc) ml->h2_acc = ml_psram_malloc(65536);
         if (ml->h2_acc && left <= 65536) {
@@ -3152,7 +3167,10 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
                             ((uint32_t)m[2] << 16) | ((uint32_t)m[3] << 24);
             /* A size we could never satisfy means we are out of frame. Losing one update is
              * recoverable; a permanently stuck accumulator is not. */
-            if (size == 0 || size > ML_JSON_BUFFER_SIZE) {
+            /* Must be `- 4`: the accumulator holds ML_JSON_BUFFER_SIZE bytes and
+             * a message occupies 4 + size, so anything larger can never complete
+             * and would churn the buffer forever. */
+            if (size == 0 || size > ML_JSON_BUFFER_SIZE - 4) {
                 ESP_LOGW(TAG, "long-poll: implausible message size %lu ('%c%c%c%c') - "
                               "discarding %u buffered bytes",
                          (unsigned long)size,
@@ -3185,6 +3203,7 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     }
 
     free(frame_buf);
+    if (proto_err) return -1;   /* caller closes the connection and reconnects */
     return 1;
 }
 
