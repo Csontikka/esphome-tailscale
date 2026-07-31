@@ -579,6 +579,14 @@ struct microlink_s {
      * The COORD_LONG_POLL stream watchdog reconnects off this clock. */
     volatile uint64_t ctrl_stream_rx_ms;
 
+    /* Long-poll MapResponse reassembly buffer. The streamed map session is length-prefixed; see
+     * tailscale/control/controlclient/direct.go:1304-1311, which reads a 4-byte LITTLE-ENDIAN size
+     * and then exactly that many bytes. A message can span several H2 DATA frames and several Noise
+     * frames, so the reader must accumulate — do_map_exchange already does, for the reason its own
+     * comment gives ("a single H2 frame can span multiple Noise frames"); the long-poll path did not. */
+    uint8_t *lp_acc;         /* PSRAM, ML_JSON_BUFFER_SIZE, lazily allocated */
+    size_t   lp_acc_len;
+
     /* Key expiry (parsed from MapResponse self-node) */
     int64_t key_expiry_epoch;       /* Unix epoch seconds, 0 = no expiry */
     bool key_expired;               /* true if Node.Expired == true */
