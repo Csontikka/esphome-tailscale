@@ -2629,8 +2629,22 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
              * then fall back to legacy DERP string (format: "127.3.3.40:REGION") */
             cJSON *home_derp = cJSON_GetObjectItem(node, "HomeDERP");
             if (home_derp && cJSON_IsNumber(home_derp) && home_derp->valueint > 0) {
-                ml->derp_home_region = (uint16_t)home_derp->valueint;
-                ESP_LOGI(TAG, "Home DERP region: %d (from server, HomeDERP)", ml->derp_home_region);
+                /* Node.HomeDERP is the control plane echoing back the
+                 * PreferredDERP we reported - it is NOT an independent
+                 * suggestion. Adopting it unconditionally undoes our own
+                 * netcheck selection: after we pick a nearer region, the next
+                 * netmap still carries the previous value (control has not
+                 * processed our report yet) and would flip the ACTIVE region
+                 * back, which is the very mismatch this series set out to fix.
+                 * Take it only as a seed when we have no region at all. */
+                if (ml->derp_home_region == 0) {
+                    ml->derp_home_region = (uint16_t)home_derp->valueint;
+                    ESP_LOGI(TAG, "Home DERP region: %d (seed from server echo)",
+                             ml->derp_home_region);
+                } else if ((uint16_t)home_derp->valueint != ml->derp_home_region) {
+                    ESP_LOGI(TAG, "Server echo HomeDERP=%d differs from our choice %u - keeping ours",
+                             home_derp->valueint, ml->derp_home_region);
+                }
             } else {
                 cJSON *self_derp = cJSON_GetObjectItem(node, "DERP");
                 if (self_derp && self_derp->valuestring) {
