@@ -2140,7 +2140,7 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
             if (!prev_reachable || prev == 0) {
                 /* No usable current home - take the best we can see. */
                 if (best != prev) {
-                    ESP_LOGI(TAG, "Home DERP: %u (%ums) - previous region %u not reachable",
+                    ESP_LOGW(TAG, "Home DERP: %u (%ums) - previous region %u not reachable",
                              best, best_rtt, prev);
                 }
                 ml->derp_preferred_region = best;
@@ -2155,7 +2155,7 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
                 bool much_better = (uint32_t)best_rtt * ML_DERP_SWITCH_RATIO_DEN <=
                                    (uint32_t)prev_rtt * ML_DERP_SWITCH_RATIO_NUM;
                 if (big_enough && much_better) {
-                    ESP_LOGI(TAG, "Home DERP changing %u (%ums) -> %u (%ums): %ldms better, ratio ok",
+                    ESP_LOGW(TAG, "Home DERP changing %u (%ums) -> %u (%ums): %ldms better, ratio ok",
                              prev, prev_rtt, best, best_rtt, (long)diff);
                     ml->derp_preferred_region = best;
                 } else {
