@@ -366,6 +366,10 @@ typedef struct {
  * DERP Map Types (parsed from MapResponse, used by coord + STUN)
  * ========================================================================== */
 
+/* Largest HTTP/2 frame we will attempt to reassemble. The wire field is 24-bit
+ * (16 MB); anything beyond what fits in one read buffer can never complete. */
+#define ML_H2_MAX_FRAME_LEN     32768
+
 #define ML_MAX_DERP_REGIONS     32
 #define ML_MAX_DERP_NODES       4
 
