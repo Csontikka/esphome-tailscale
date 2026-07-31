@@ -2231,12 +2231,25 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
                 }
             }
             if (ml->derp_preferred_region != prev && ml->derp_preferred_region != 0) {
-                /* Report the new region immediately. Until the control plane
-                 * has it, peers are still being told to reach us at the old
-                 * one, so every second of delay is a second of unreachability. */
+                /* Announce BEFORE moving. Peers reach us at the HomeDERP the
+                 * control plane advertises, which it derives from the
+                 * PreferredDERP we report. If we switch our own connection
+                 * first, we stop listening where everyone is still calling and
+                 * go dark until the new region propagates - observed as several
+                 * minutes of unreachability on a relay-only board.
+                 *
+                 * The reference can move immediately because magicsock keeps
+                 * connections to several regions and prunes idle ones later
+                 * (wgengine/magicsock/derp.go). We hold exactly one, so the
+                 * equivalent is to stay on the old relay until control has been
+                 * told, and only then move. derp_home_region is therefore NOT
+                 * updated here - the coord loop applies it once the endpoint
+                 * update has actually gone out. */
                 ml->derp_home_pending_report = true;
+            } else {
+                /* No change, or nothing chosen yet: keep them in step. */
+                ml->derp_home_region = ml->derp_preferred_region;
             }
-            ml->derp_home_region = ml->derp_preferred_region;
         }
     }
 
@@ -3521,12 +3534,23 @@ void ml_coord_task(void *arg) {
                  * lands, every peer is still dialling the old region. */
                 if (ml->derp_home_pending_report) {
                     ml->derp_home_pending_report = false;
-                    ESP_LOGW(TAG, "Home DERP changed to %u - reporting to control plane now",
-                             ml->derp_preferred_region);
+                    ESP_LOGW(TAG, "Announcing home DERP %u to control (still on %u)",
+                             ml->derp_preferred_region, ml->derp_home_region);
                     if (do_send_endpoint_update(ml, &noise) < 0) {
-                        /* Could not tell control. Try again next iteration
-                         * rather than leaving peers pointed at the old region. */
+                        /* Could not tell control. Stay where we are and retry:
+                         * moving now would take us off the relay peers are
+                         * still being pointed at. */
                         ml->derp_home_pending_report = true;
+                    } else {
+                        /* Control has our new PreferredDERP. Only now move our
+                         * own connection, so we are never listening somewhere
+                         * nobody has been told about. */
+                        if (ml->derp_home_region != ml->derp_preferred_region) {
+                            ESP_LOGW(TAG, "Announced - moving home DERP %u -> %u",
+                                     ml->derp_home_region, ml->derp_preferred_region);
+                            ml->derp_home_region = ml->derp_preferred_region;
+                            xEventGroupSetBits(ml->events, ML_EVT_DERP_RECONNECT);
+                        }
                     }
                 }
 
