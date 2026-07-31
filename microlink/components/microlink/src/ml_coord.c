@@ -1608,14 +1608,23 @@ static void parse_peers_from_map_response(microlink_t *ml, cJSON *root) {
      *   "Peers"        - Full peer list (initial Stream=false response)
      *   "PeersChanged" - Incremental updates (Stream=true long-poll)
      *   "peers"        - Lowercase fallback */
+    /* A full "Peers" list is authoritative: the control plane expresses ACL
+     * revocation by OMITTING a peer, never by sending PeersRemoved (#32).
+     * "PeersChanged" is incremental — present entries only, no omission
+     * semantics — so it must not trigger the sweep below. */
+    bool authoritative = false;
     cJSON *peers = cJSON_GetObjectItem(root, "Peers");
+    if (peers) authoritative = true;
     if (!peers) {
         peers = cJSON_GetObjectItem(root, "PeersChanged");
         if (peers) ESP_LOGI(TAG, "Using 'PeersChanged' field for peer list");
     }
     if (!peers) {
         peers = cJSON_GetObjectItem(root, "peers");
-        if (peers) ESP_LOGI(TAG, "Using 'peers' (lowercase) field for peer list");
+        if (peers) {
+            authoritative = true;
+            ESP_LOGI(TAG, "Using 'peers' (lowercase) field for peer list");
+        }
     }
     if (!peers || !cJSON_IsArray(peers)) {
         /* Normal for delta updates (PeersRemoved, PeersChangedPatch only) */
@@ -1768,6 +1777,50 @@ static void parse_peers_from_map_response(microlink_t *ml, cJSON *root) {
         if (xQueueSend(ml->peer_update_queue, &update, pdMS_TO_TICKS(100)) != pdTRUE) {
             ESP_LOGW(TAG, "Peer update queue full, dropping %s", update->hostname);
             free(update);
+        }
+    }
+
+    /* #32 sweep: any table entry whose nodekey is absent from an
+     * authoritative list gets queued for removal. This is what makes ACL
+     * revocation (and any other silent omission — e.g. NVS-cached peers
+     * from a previous control plane) actually reach the device. Queued
+     * AFTER the adds above, so listed peers are updated first and only
+     * true leftovers are removed. */
+    if (authoritative) {
+        int swept = 0;
+        for (int i = 0; i < ML_MAX_PEERS; i++) {
+            if (!ml->peers[i].active) continue;
+
+            bool present = false;
+            cJSON *pj;
+            cJSON_ArrayForEach(pj, peers) {
+                cJSON *k = cJSON_GetObjectItem(pj, "Key");
+                if (!k || !k->valuestring) continue;
+                const char *hex = k->valuestring;
+                if (strncmp(hex, "nodekey:", 8) == 0) hex += 8;
+                uint8_t key[32];
+                hex_to_bytes(hex, key, 32);
+                if (memcmp(key, ml->peers[i].public_key, 32) == 0) {
+                    present = true;
+                    break;
+                }
+            }
+            if (present) continue;
+
+            ml_peer_update_t *rm = ml_psram_calloc(1, sizeof(ml_peer_update_t));
+            if (!rm) continue;
+            rm->action = ML_PEER_REMOVE;
+            memcpy(rm->public_key, ml->peers[i].public_key, 32);
+            ESP_LOGI(TAG, "Peer sweep: %s not in authoritative netmap — removing",
+                     ml->peers[i].hostname);
+            if (xQueueSend(ml->peer_update_queue, &rm, pdMS_TO_TICKS(100)) != pdTRUE) {
+                free(rm);
+            } else {
+                swept++;
+            }
+        }
+        if (swept > 0) {
+            ESP_LOGI(TAG, "Peer sweep: %d stale peer(s) removed", swept);
         }
     }
 

@@ -661,6 +661,12 @@ Development and automated validation happen on ESP32-S3 with PSRAM. Other varian
 
 If a particular variant matters to you, running `esphome compile` on the example config is the fastest way to check whether it fits: a failed build names the constraint that was hit.
 
+### Large tailnets: scope the device with ACLs
+
+Unlike `tailscaled`, which establishes WireGuard sessions lazily when there is actual traffic for a peer, this component handshakes **eagerly across every peer in its netmap** — each visible peer costs a session slot (~0.9 KB), periodic DISCO probes, and continuous WireGuard handshake retries toward peers that never answer. On a large tailnet this adds up: an 85-node tailnet has been measured at ~1,000 handshake attempts per hour toward dozens of peers the device never talks to.
+
+The right fix is a [tailnet ACL](https://tailscale.com/kb/1018/acls) that lets the device see only the peers it actually needs (typically one or two hosts). This cuts radio and CPU cost, frees peer slots, and shrinks every netmap the device has to parse. `max_peers` caps the table size, but an ACL is what stops the chatter at the source.
+
 ### ESPHome package cache
 
 When loading the component via `packages:` from a GitHub source, ESPHome caches the fetched content for 24 hours by default. During active development against `main`, this can hide newly pushed changes for a full day.

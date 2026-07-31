@@ -264,6 +264,31 @@ int ml_peer_nvs_load_all(ml_peer_t *peers, int max_peers) {
     return loaded;
 }
 
+esp_err_t ml_peer_nvs_remove(const uint8_t public_key[32]) {
+    if (!s_initialized || !public_key || !s_table) return ESP_ERR_INVALID_STATE;
+
+    int slot = -1;
+    for (int i = 0; i < s_table->count; i++) {
+        if (memcmp(s_table->entries[i].public_key, public_key, 32) == 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) return ESP_ERR_NOT_FOUND;
+
+    ESP_LOGI(TAG, "Removing cached peer: %s (slot=%d)",
+             s_table->entries[slot].hostname_short, slot);
+
+    /* Compact: shift the tail down one slot */
+    for (int i = slot; i < s_table->count - 1; i++) {
+        s_table->entries[i] = s_table->entries[i + 1];
+    }
+    s_table->count--;
+    memset(&s_table->entries[s_table->count], 0, sizeof(peer_nvs_entry_t));
+
+    return flush_table();
+}
+
 esp_err_t ml_peer_nvs_clear(void) {
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
 

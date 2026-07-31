@@ -143,6 +143,15 @@ extern "C" {
  * this one guards the map stream specifically (#32). */
 #define ML_CTRL_STREAM_STALE_MS         300000
 
+/* DERP relay liveness (#33). The 3-attempt connect bursts are only re-armed
+ * by a coord (re)connect or an incoming DERPMap — neither fires while coord
+ * sits in COORD_LONG_POLL, so the writer task must own its own recovery:
+ * retry forever on exponential backoff, and treat RX silence on a
+ * "connected" socket as a dead link (DERP servers keepalive every ~15-60s). */
+#define ML_DERP_RETRY_MIN_MS            5000
+#define ML_DERP_RETRY_MAX_MS            60000
+#define ML_DERP_STALE_MS                90000
+
 /* Large tailnet buffer sizes (PSRAM-allocated, configurable via menuconfig) */
 #define ML_H2_BUFFER_SIZE       (CONFIG_ML_H2_BUFFER_SIZE_KB * 1024)
 #define ML_JSON_BUFFER_SIZE     (CONFIG_ML_JSON_BUFFER_SIZE_KB * 1024)
@@ -707,6 +716,7 @@ esp_err_t ml_peer_nvs_init(void);
 void ml_peer_nvs_deinit(void);
 esp_err_t ml_peer_nvs_save(const ml_peer_t *peer);
 int ml_peer_nvs_load_all(ml_peer_t *peers, int max_peers);
+esp_err_t ml_peer_nvs_remove(const uint8_t public_key[32]);
 esp_err_t ml_peer_nvs_clear(void);
 
 #ifdef CONFIG_ML_ZERO_COPY_WG

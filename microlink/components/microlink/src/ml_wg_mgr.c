@@ -797,6 +797,10 @@ static void remove_peer(microlink_t *ml, const ml_peer_update_t *update) {
     microlink_ip_to_str(ml->peers[idx].vpn_ip, ip_str);
     ESP_LOGI(TAG, "Peer removed: %s (%s)", ml->peers[idx].hostname, ip_str);
 
+    /* Drop the NVS cache entry too, or the peer resurrects at next boot
+     * (#32 — removed/ACL-revoked peers must stay gone across reboots). */
+    ml_peer_nvs_remove(ml->peers[idx].public_key);
+
     ml->peers[idx].active = false;
 
     /* Compact peer_count */
@@ -1304,7 +1308,16 @@ static void process_disco_packet(microlink_t *ml, const ml_rx_packet_t *pkt) {
 
     if (nacl_box_open(plaintext, ciphertext, ciphertext_len, nonce,
                       sender_disco_key, ml->disco_private_key) != 0) {
-        ESP_LOGW(TAG, "DISCO decrypt failed");
+        /* Name the claimed sender (#31): the packet carries the sender's
+         * current disco pubkey — if it matches a known peer the failure is
+         * OUR stale key material; if unknown, the sender rotated or is
+         * foreign, and the prefix lets it be correlated externally. */
+        int sender_idx = find_peer_by_disco_key(ml, sender_disco_key);
+        ESP_LOGW(TAG, "DISCO decrypt failed (from %s via %s, disco_key=%02x%02x%02x%02x...)",
+                 sender_idx >= 0 ? ml->peers[sender_idx].hostname : "unknown peer",
+                 pkt->via_derp ? "DERP" : "direct",
+                 sender_disco_key[0], sender_disco_key[1],
+                 sender_disco_key[2], sender_disco_key[3]);
         free(plaintext);
         return;
     }

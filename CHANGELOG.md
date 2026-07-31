@@ -10,6 +10,14 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **A failed DERP relay connection now recovers instead of staying dead for the rest of the boot** ([#33](https://github.com/Csontikka/esphome-tailscale/issues/33)). Both the connect and reconnect paths gave up after 3 attempts, and nothing ever re-armed them while the control plane sat healthy in its long-poll — a ~10 s transient at the wrong moment killed the relay path permanently while `VPN Connected` stayed true. The relay task now retries indefinitely on exponential backoff (5 s doubling to a 60 s cap, mirroring the control-plane reconnect policy), and a new RX-liveness watchdog reconnects when a "connected" relay has been silent for 90 s (DERP servers keepalive every ~15–60 s), instead of trusting a liveness stamp the task refreshed itself. Fixing the retry exposed a second, worse bug on the same path: every failed connect attempt leaked the full TLS state (~17 KB), so repeated failures exhausted the heap until every later TLS handshake died instantly (`SSL - Bad input parameters`) — retrying forever would have been useless without also fixing this; all failure paths now tear down the TLS context completely.
+- **Self-hosted Headscale with embedded DERP: the relay now actually connects.** When the device's home DERP region isn't present in the tailnet's DERPMap (typical on Headscale, which serves only its embedded region), the component dialed a hardcoded public Tailscale relay that none of the tailnet's peers use. It now picks the first usable region from the tailnet's own DERPMap and makes it home.
+- **ACL revocation (and any other silent peer omission) now reaches the device** (reported in [#32](https://github.com/Csontikka/esphome-tailscale/issues/32)). Peers were only ever dropped on an explicit `PeersRemoved`, but the control plane expresses ACL revocation by simply omitting the peer from the next full netmap — so revoked peers were probed and handshaked forever, and the NVS fast-boot cache resurrected them (and even peers from a *previous control plane*) at every reboot. A full `Peers` list is now treated as authoritative: table entries absent from it are removed, and removals also drop the peer's NVS cache entry so it stays gone across reboots.
+
+### Changed
+- `DISCO decrypt failed` now names the claimed sender (peer hostname when the disco key is known, `unknown peer` + key prefix otherwise) and the path it arrived on (DERP/direct), so the failure can be attributed to a specific peer ([#31](https://github.com/Csontikka/esphome-tailscale/issues/31)).
+
 ## [0.5.4] — 2026-07-29
 
 ### Fixed
