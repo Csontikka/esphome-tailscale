@@ -2359,22 +2359,20 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
         /* Streaming responses (send_request=false) never carry END_STREAM —
          * the message boundary is the 4-byte length prefix in front of the
          * JSON body. Stop reading once the prefixed message is complete.
-         * The prefix endianness is not spelled out anywhere authoritative
-         * for this stack, so accept whichever plausible reading is larger;
-         * an implausible prefix simply falls back to the recv timeout. */
+         *
+         * The prefix is little-endian; this used to try both endiannesses and
+         * take whichever looked larger, which could overestimate how long to
+         * wait. See control/controlclient/direct.go:1303-1311, which this
+         * series now follows everywhere else - reading it two ways here while
+         * asserting one reading elsewhere was inconsistent. */
         if (!send_request && !got_end_stream &&
             first_data_payload && first_data_len >= 4) {
             uint32_t le = (uint32_t)first_data_payload[0] |
                           ((uint32_t)first_data_payload[1] << 8) |
                           ((uint32_t)first_data_payload[2] << 16) |
                           ((uint32_t)first_data_payload[3] << 24);
-            uint32_t be = ((uint32_t)first_data_payload[0] << 24) |
-                          ((uint32_t)first_data_payload[1] << 16) |
-                          ((uint32_t)first_data_payload[2] << 8) |
-                           (uint32_t)first_data_payload[3];
             uint32_t need = 0;
             if (le >= 2 && le < ML_JSON_BUFFER_SIZE) need = le;
-            if (be >= 2 && be < ML_JSON_BUFFER_SIZE && be > need) need = be;
             if (need > 0 && scan_data_total >= (size_t)need + 4) {
                 ESP_LOGI(TAG, "Streamed MapResponse complete (%lu+4 bytes) after %d Noise frames",
                          (unsigned long)need, read_count + 1);
