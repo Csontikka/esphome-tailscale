@@ -72,6 +72,51 @@ static uint32_t resolve_v4(const char *hostname) {
     return ip;
 }
 
+/* ---- best-recent latency, per tailscale/net/netcheck/netcheck.go:1525 --------
+ * The reference selects on the lowest latency seen per region across recent
+ * reports, not the newest single probe, so one lossy sample cannot move the
+ * home region. We keep a short ring of past netchecks and take the minimum.
+ * ------------------------------------------------------------------------- */
+
+/* Rotate derp_rtt_hist and store the netcheck that just completed in slot 0. */
+void ml_netcheck_record_history(microlink_t *ml) {
+    if (!ml) return;
+    for (int h = ML_DERP_RTT_HISTORY - 1; h > 0; h--) {
+        memcpy(ml->derp_rtt_hist[h], ml->derp_rtt_hist[h - 1],
+               sizeof(ml->derp_rtt_hist[0]));
+    }
+    memcpy(ml->derp_rtt_hist[0], ml->derp_rtt_ms, sizeof(ml->derp_rtt_hist[0]));
+}
+
+/* Lowest RTT recorded for `region` across the history. 0 = never answered. */
+uint16_t ml_netcheck_best_recent_rtt(const microlink_t *ml, uint16_t region) {
+    if (!ml || region == 0) return 0;
+    int idx = -1;
+    for (int r = 0; r < ml->derp_region_count; r++) {
+        if (ml->derp_regions[r].region_id == region) { idx = r; break; }
+    }
+    if (idx < 0) return 0;
+    uint16_t best = 0;
+    for (int h = 0; h < ML_DERP_RTT_HISTORY; h++) {
+        uint16_t v = ml->derp_rtt_hist[h][idx];
+        if (v > 0 && (best == 0 || v < best)) best = v;
+    }
+    return best;
+}
+
+/* Region with the lowest best-recent RTT. 0 if nothing answered at all. */
+uint16_t ml_netcheck_best_recent_region(const microlink_t *ml) {
+    if (!ml) return 0;
+    uint16_t best_region = 0, best_rtt = 0;
+    for (int r = 0; r < ml->derp_region_count; r++) {
+        uint16_t id = ml->derp_regions[r].region_id;
+        uint16_t v  = ml_netcheck_best_recent_rtt(ml, id);
+        if (v == 0) continue;
+        if (best_rtt == 0 || v < best_rtt) { best_rtt = v; best_region = id; }
+    }
+    return best_region;
+}
+
 uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     if (!ml || ml->derp_region_count == 0) return 0;
 

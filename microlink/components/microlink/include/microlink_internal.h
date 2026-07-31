@@ -367,6 +367,14 @@ typedef struct {
  * ========================================================================== */
 
 #define ML_MAX_DERP_REGIONS     32
+#define ML_DERP_RTT_HISTORY      3      /* netchecks kept for best-recent latency */
+
+/* Home-DERP stickiness, from tailscale/net/netcheck/netcheck.go:1376-1381.
+ * Changing home DERP is disruptive (peers must be told), so a new region must
+ * be better by BOTH an absolute margin AND a proportional one. */
+#define ML_DERP_SWITCH_MIN_DIFF_MS   10     /* preferredDERPAbsoluteDiff */
+#define ML_DERP_SWITCH_RATIO_NUM     2      /* new must be <= old * 2/3 */
+#define ML_DERP_SWITCH_RATIO_DEN     3
 #define ML_MAX_DERP_NODES       4
 
 typedef struct {
@@ -545,6 +553,17 @@ struct microlink_s {
      * Same index as derp_regions; 0 = no measurement / timed out. */
     uint16_t derp_rtt_ms[ML_MAX_DERP_REGIONS];
 
+    /* Best-recent latency per region, across the last ML_DERP_RTT_HISTORY
+     * netchecks. The reference selects on the best latency seen over a recent
+     * window rather than the newest single probe, so one unlucky sample cannot
+     * move our home region (net/netcheck/netcheck.go:1525 bestRecentLatencyLocked).
+     * Slot 0 is the newest; the ring is rotated on each netcheck. */
+    uint16_t derp_rtt_hist[ML_DERP_RTT_HISTORY][ML_MAX_DERP_REGIONS];
+
+    /* The region WE have chosen as home, from our own measurements. This is
+     * what gets reported to the control plane in NetInfo.PreferredDERP. */
+    uint16_t derp_preferred_region;
+
     /* ml_get_time_ms() value when state transitioned to CONNECTED. 0 means
      * not currently connected. Used for the GUI tailnet uptime row. */
     uint64_t connected_at_ms;
@@ -678,6 +697,9 @@ esp_err_t ml_stun_send_probe_ipv6(microlink_t *ml, const uint8_t *server_ip6, ui
  * a STUN binding request in parallel, measures RTT, returns the
  * region_id with the lowest RTT. Returns 0 if nothing responded. */
 uint16_t ml_netcheck_pick_best_derp(microlink_t *ml);
+void     ml_netcheck_record_history(microlink_t *ml);
+uint16_t ml_netcheck_best_recent_rtt(const microlink_t *ml, uint16_t region);
+uint16_t ml_netcheck_best_recent_region(const microlink_t *ml);
 bool ml_stun_parse_response(const uint8_t *data, size_t len,
                              uint32_t *out_ip, uint16_t *out_port);
 bool ml_stun_parse_response_ipv6(const uint8_t *data, size_t len,

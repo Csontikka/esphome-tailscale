@@ -1270,7 +1270,20 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
     {
         cJSON *netinfo = cJSON_CreateObject();
         if (netinfo) {
-            cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
+            /* Report the region WE picked from our own netcheck. Sending
+             * derp_region_default here is circular: the control plane echoes
+             * whatever we send back as Node.HomeDERP, we then adopt that echo
+             * as our default, and send it again - so an initially wrong region
+             * is self-sustaining and can never be measured away. Worse, peers
+             * are told to reach us at that wrong region.
+             *
+             * The reference picks its home DERP from its own netcheck report
+             * (magicsock/derp.go:197 preferredDERP = report.PreferredDERP) and
+             * informs control; control never dictates it. */
+            uint16_t report_derp = ml->derp_preferred_region;
+            if (report_derp == 0) report_derp = ml->derp_home_region;
+            if (report_derp == 0) report_derp = ml->derp_region_default;
+            cJSON_AddNumberToObject(netinfo, "PreferredDERP", report_derp);
             cJSON_AddItemToObject(hostinfo, "NetInfo", netinfo);
         }
     }
@@ -2107,30 +2120,52 @@ static bool parse_derp_map_from_response(microlink_t *ml, cJSON *map_json) {
      *       Sao Paulo 86 ms with a 50 ms threshold = stay on FFM). */
     if (ml->derp_region_count > 0) {
         uint16_t measured = ml_netcheck_pick_best_derp(ml);
-        uint16_t cp = ml->derp_region_default;
 
-        if (!ml->config.netcheck_override_enabled) {
-            ESP_LOGI(TAG, "Netcheck override disabled by config — using control-plane DERP %u", cp);
-        } else if (measured > 0 && measured != cp) {
-            /* Look up RTTs from ml->derp_rtt_ms (aligned with derp_regions[]). */
-            uint16_t measured_rtt = 0, cp_rtt = 0;
-            for (int r = 0; r < ml->derp_region_count; r++) {
-                if (ml->derp_regions[r].region_id == measured) measured_rtt = ml->derp_rtt_ms[r];
-                if (ml->derp_regions[r].region_id == cp) cp_rtt = ml->derp_rtt_ms[r];
-            }
-            bool cp_has_rtt = (cp != 0 && cp_rtt > 0);
-            int32_t improvement = cp_has_rtt ? (int32_t)cp_rtt - (int32_t)measured_rtt : INT32_MAX;
-            int32_t thresh = (int32_t)ml->config.netcheck_override_threshold_ms;
-            if (improvement >= thresh) {
-                ESP_LOGI(TAG, "Netcheck override: %u (%ums) -> %u (%ums), improvement %ldms >= %ldms threshold",
-                         cp, cp_rtt, measured, measured_rtt, (long)improvement, (long)thresh);
-                ml->derp_home_region = measured;
+        /* Fold this netcheck into the best-recent history and select on that,
+         * as the reference does (netcheck.go:1427-1500). Selection is ours to
+         * make; the control plane only relays what we report. */
+        ml_netcheck_record_history(ml);
+        uint16_t prev = ml->derp_preferred_region;
+        if (prev == 0) prev = ml->derp_home_region;
+        if (prev == 0) prev = ml->derp_region_default;
+
+        uint16_t best = ml_netcheck_best_recent_region(ml);
+        if (best == 0) best = measured;
+
+        if (best > 0) {
+            uint16_t best_rtt = ml_netcheck_best_recent_rtt(ml, best);
+            uint16_t prev_rtt = (prev > 0) ? ml_netcheck_best_recent_rtt(ml, prev) : 0;
+            bool prev_reachable = (prev > 0 && prev_rtt > 0);
+
+            if (!prev_reachable || prev == 0) {
+                /* No usable current home - take the best we can see. */
+                if (best != prev) {
+                    ESP_LOGI(TAG, "Home DERP: %u (%ums) - previous region %u not reachable",
+                             best, best_rtt, prev);
+                }
+                ml->derp_preferred_region = best;
+            } else if (best == prev) {
+                ml->derp_preferred_region = prev;
             } else {
-                ESP_LOGI(TAG, "Netcheck found %u (%ums) faster than CP %u (%ums) but improvement %ldms < %ldms threshold — staying on CP",
-                         measured, measured_rtt, cp, cp_rtt, (long)improvement, (long)thresh);
+                /* Stickiness: require BOTH an absolute and a proportional
+                 * improvement before moving, so we do not flap between two
+                 * similar regions (each move must be announced to peers). */
+                int32_t diff = (int32_t)prev_rtt - (int32_t)best_rtt;
+                bool big_enough  = diff >= ML_DERP_SWITCH_MIN_DIFF_MS;
+                bool much_better = (uint32_t)best_rtt * ML_DERP_SWITCH_RATIO_DEN <=
+                                   (uint32_t)prev_rtt * ML_DERP_SWITCH_RATIO_NUM;
+                if (big_enough && much_better) {
+                    ESP_LOGI(TAG, "Home DERP changing %u (%ums) -> %u (%ums): %ldms better, ratio ok",
+                             prev, prev_rtt, best, best_rtt, (long)diff);
+                    ml->derp_preferred_region = best;
+                } else {
+                    ESP_LOGI(TAG, "Home DERP staying %u (%ums); %u is %ums but %s",
+                             prev, prev_rtt, best, best_rtt,
+                             big_enough ? "not proportionally better" : "margin too small");
+                    ml->derp_preferred_region = prev;
+                }
             }
-        } else if (measured > 0 && measured == cp) {
-            ml->derp_home_region = measured;
+            ml->derp_home_region = ml->derp_preferred_region;
         }
     }
 
@@ -2809,7 +2844,20 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
 
         cJSON *netinfo = cJSON_CreateObject();
         if (netinfo) {
-            cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
+            /* Report the region WE picked from our own netcheck. Sending
+             * derp_region_default here is circular: the control plane echoes
+             * whatever we send back as Node.HomeDERP, we then adopt that echo
+             * as our default, and send it again - so an initially wrong region
+             * is self-sustaining and can never be measured away. Worse, peers
+             * are told to reach us at that wrong region.
+             *
+             * The reference picks its home DERP from its own netcheck report
+             * (magicsock/derp.go:197 preferredDERP = report.PreferredDERP) and
+             * informs control; control never dictates it. */
+            uint16_t report_derp = ml->derp_preferred_region;
+            if (report_derp == 0) report_derp = ml->derp_home_region;
+            if (report_derp == 0) report_derp = ml->derp_region_default;
+            cJSON_AddNumberToObject(netinfo, "PreferredDERP", report_derp);
             if (ml->stun_nat_checked) {
                 cJSON_AddBoolToObject(netinfo, "MappingVariesByDestIP", ml->nat_mapping_varies);
             }
