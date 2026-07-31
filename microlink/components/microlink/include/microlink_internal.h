@@ -584,6 +584,11 @@ struct microlink_s {
      * and then exactly that many bytes. A message can span several H2 DATA frames and several Noise
      * frames, so the reader must accumulate — do_map_exchange already does, for the reason its own
      * comment gives ("a single H2 frame can span multiple Noise frames"); the long-poll path did not. */
+    /* HTTP/2 frame reassembly for the long-poll socket. A DATA frame whose
+     * payload is split across two reads must be completed, not dropped. */
+    uint8_t *h2_acc;
+    size_t   h2_acc_len;
+
     uint8_t *lp_acc;         /* PSRAM, ML_JSON_BUFFER_SIZE, lazily allocated */
     size_t   lp_acc_len;
 
