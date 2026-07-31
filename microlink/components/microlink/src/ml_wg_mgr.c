@@ -1729,7 +1729,11 @@ static void disco_periodic_probes(microlink_t *ml) {
 
         /* Idle-session gate. The reference stops heartbeating a peer whose
          * session has gone quiet (magicsock/endpoint.go:835, sessionActiveTimeout
-         * = 45 s) rather than probing peers it is not talking to. Without this
+         * = 45 s) rather than probing peers it is not talking to. Note one
+         * deliberate deviation: the reference gates on lastSendExt (time since
+         * WE last sent), where this gates on max(last_rx, last_tx). A peer that
+         * keeps sending to us therefore stays probed here - more conservative
+         * than the reference, not equivalent to it. Without this
          * every known peer is probed forever, which on a relay-only device -
          * where every peer costs a full relay round trip - saturates the
          * 32-slot probe table permanently and floods the log. Measured on such

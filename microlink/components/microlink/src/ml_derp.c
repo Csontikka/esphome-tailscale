@@ -373,7 +373,7 @@ static void dispatch_derp_frame(microlink_t *ml, uint8_t frame_type,
 
     case DERP_FRAME_HEALTH:
         /* Server telling us this connection is unhealthy. Its only current use
-         * upstream is duplicate-connection detection (derp.go:118-123) - two
+         * upstream is duplicate-connection detection (derp.go:117-122) - two
          * clients on one node key fighting over the same relay session, which
          * looks exactly like an unreachable node from the outside. Worth
          * seeing rather than dropping. */
