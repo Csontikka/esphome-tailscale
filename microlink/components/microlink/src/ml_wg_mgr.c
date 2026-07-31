@@ -783,6 +783,23 @@ static int add_peer(microlink_t *ml, const ml_peer_update_t *update) {
     return idx;
 }
 
+/* Called from the DERP task when a relay reports PeerGone. The reference drops
+ * its DERP route for the peer (magicsock/derp.go:652-665); there is no route
+ * table here, so the equivalent is to stop pushing WireGuard handshakes through
+ * a relay that has just said it cannot deliver them. Writing one timestamp from
+ * another task is safe: a torn read costs at most one extra or skipped retry. */
+void ml_wg_mgr_notify_derp_gone(microlink_t *ml, const uint8_t *public_key) {
+    if (!ml || !public_key) return;
+    for (int i = 0; i < ml->peer_count; i++) {
+        if (!ml->peers[i].active) continue;
+        if (memcmp(ml->peers[i].public_key, public_key, 32) != 0) continue;
+        ml->peers[i].derp_gone_until_ms = ml_get_time_ms() + ML_DERP_GONE_BACKOFF_MS;
+        ESP_LOGW(TAG, "Relay reports no path to %s - pausing DERP handshakes for %ds",
+                 ml->peers[i].hostname, ML_DERP_GONE_BACKOFF_MS / 1000);
+        return;
+    }
+}
+
 static void remove_peer(microlink_t *ml, const ml_peer_update_t *update) {
     int idx = find_peer_by_key(ml, update->public_key);
     if (idx < 0) return;
