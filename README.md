@@ -995,4 +995,4 @@ See [`microlink/LICENSE`](microlink/LICENSE) and [`microlink/x25519-license.txt`
 
 Found a bug or have an idea? [Open an issue](https://github.com/Csontikka/esphome-tailscale/issues) — feedback and feature requests are welcome!
 
-If you find this component useful, consider [buying me a coffee](https://buymeacoffee.com/csontikka) ☕
+If you find this component useful, consider [buying me a coffee](https://buymeacoffee.com/csontikka) ☕ or [sponsoring me on GitHub](https://github.com/sponsors/Csontikka)
