@@ -3,6 +3,7 @@
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/Csontikka/esphome-tailscale?style=plastic)
 [![ESPHome External Component](https://img.shields.io/badge/ESPHome-external%20component-black?style=plastic&logo=esphome&logoColor=white)](https://esphome.io/components/external_components.html)
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=plastic)](https://github.com/Csontikka/esphome-tailscale/blob/main/LICENSE)
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa.svg?style=plastic&logo=githubsponsors)](https://github.com/sponsors/Csontikka)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-donate-yellow.svg?style=plastic)](https://buymeacoffee.com/csontikka)
 
 > [!NOTE]
