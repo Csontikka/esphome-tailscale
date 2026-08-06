@@ -5,6 +5,10 @@ on:
     - cron: '0 8 * * 1'  # Every Monday at 8:00 UTC
   workflow_dispatch:  # Manual trigger
 
+permissions:
+  contents: read
+  issues: write  # the notification issue below
+
 jobs:
   check-upstream:
     runs-on: ubuntu-latest
@@ -12,20 +16,27 @@ jobs:
       - name: Check for upstream changes
         id: check
         run: |
-          # Get latest commit from upstream
-          UPSTREAM_SHA=$(git ls-remote https://github.com/CamM2325/microlink.git HEAD | cut -f1)
-          # Get latest commit from our fork
-          FORK_SHA=$(git ls-remote https://github.com/Csontikka/microlink.git HEAD | cut -f1)
+          # The fork carries its own commits, so comparing HEAD SHAs would flag
+          # "changed" forever. Instead check whether upstream's HEAD is an
+          # ancestor of the fork's HEAD — only genuinely new upstream commits
+          # (not yet synced into the fork) count as a change.
+          git clone -q --filter=blob:none https://github.com/Csontikka/microlink.git fork
+          cd fork
+          git remote add upstream https://github.com/CamM2325/microlink.git
+          git fetch -q upstream
 
+          UPSTREAM_SHA=$(git rev-parse upstream/HEAD)
+          FORK_SHA=$(git rev-parse HEAD)
           echo "upstream=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
           echo "fork=$FORK_SHA" >> $GITHUB_OUTPUT
 
-          if [ "$UPSTREAM_SHA" != "$FORK_SHA" ]; then
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Fork contains upstream HEAD — up to date."
+          else
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "Upstream has new commits!"
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "Fork is up to date."
+            git log --oneline HEAD..upstream/HEAD | head -20
           fi
 
       - name: Create issue if upstream changed
@@ -44,7 +55,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 title: 'Microlink upstream has new updates',
-                body: `The upstream [CamM2325/microlink](https://github.com/CamM2325/microlink) has new commits.\n\nUpstream: \`${{ steps.check.outputs.upstream }}\`\nFork: \`${{ steps.check.outputs.fork }}\`\n\n**Action needed:**\n1. Sync fork on GitHub (Csontikka/microlink → Sync fork)\n2. Review changes for breaking changes\n3. Copy updated microlink/ into this repo\n4. Test build + flash`,
+                body: `The upstream [CamM2325/microlink](https://github.com/CamM2325/microlink) has new commits not yet in the fork.\n\nUpstream: \`${{ steps.check.outputs.upstream }}\`\nFork: \`${{ steps.check.outputs.fork }}\`\n\n**Action needed:**\n1. Sync fork on GitHub (Csontikka/microlink → Sync fork)\n2. Review changes for breaking changes\n3. Copy updated microlink/ into this repo\n4. Test build + flash`,
                 labels: ['upstream-update']
               });
             }
