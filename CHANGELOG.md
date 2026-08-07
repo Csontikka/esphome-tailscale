@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **Large tailnets: netmap updates spanning multiple HTTP/2 frames are no longer corrupted or silently lost** ([#35](https://github.com/Csontikka/esphome-tailscale/pull/35), by [@timmills](https://github.com/timmills)). A MapResponse large enough to span DATA frames (or arrive split across socket reads — routine, since compression is disabled) desynchronised the long-poll reader: frames split across reads were dropped, only the last DATA frame in a read was kept, and the initial netmap's trailing bytes were discarded — producing deterministic `implausible message size` errors and silently lost peer updates on tailnets past a few dozen nodes. The long-poll reader now reassembles HTTP/2 frames across reads, accumulates every stream-5 DATA frame, and both map paths share one length-prefixed (4-byte little-endian, per the reference client) framed stream. The series also fixes six defects found reviewing it against the reference: a one-byte out-of-bounds write, bytes lost when a read ended mid-frame-header, unbounded frame lengths stalling the reader, reassembly state surviving reconnects, an oversized-frame guard that re-injected rejected bytes, and a completion detector that probed both endiannesses. Verified on hardware with a 53-node netmap (43.5 KB across 14 Noise frames, byte-exact). Follow-up hardening: an implausible length prefix now drops the session and reconnects instead of discarding the buffer — once the framed stream is out of sync there is no recovery within the session, and discarding alone left the node wedged with every liveness signal green.
+
 ## [0.5.5] — 2026-08-06
 
 ### Fixed

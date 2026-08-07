@@ -3163,20 +3163,28 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
             uint8_t *m = ml->lp_acc + consumed;
             uint32_t size = (uint32_t)m[0] | ((uint32_t)m[1] << 8) |
                             ((uint32_t)m[2] << 16) | ((uint32_t)m[3] << 24);
-            /* A size we could never satisfy means we are out of frame. Losing one update is
-             * recoverable; a permanently stuck accumulator is not. */
             /* Must be `- 4`: the accumulator holds ML_JSON_BUFFER_SIZE bytes and
              * a message occupies 4 + size, so anything larger can never complete
              * and would churn the buffer forever. */
             if (size == 0 || size > ML_JSON_BUFFER_SIZE - 4) {
-                ESP_LOGW(TAG, "long-poll: implausible message size %lu ('%c%c%c%c') - "
-                              "discarding %u buffered bytes",
+                /* An unsatisfiable size means the length-prefixed stream is out
+                 * of frame. Discarding the buffer does NOT realign it - the next
+                 * read still lands mid-message while ctrl_stream_rx_ms keeps
+                 * getting stamped, so the node would sit wedged with every
+                 * liveness signal green. Same reasoning as the oversized-H2
+                 * guard above: once framing is lost there is no recovery within
+                 * the session - close it and let the coord state machine
+                 * reconnect. */
+                ESP_LOGE(TAG, "long-poll: implausible message size %lu ('%c%c%c%c') - "
+                              "stream out of frame, dropping the session (%u buffered bytes)",
                          (unsigned long)size,
                          isprint(m[0]) ? m[0] : '.', isprint(m[1]) ? m[1] : '.',
                          isprint(m[2]) ? m[2] : '.', isprint(m[3]) ? m[3] : '.',
                          (unsigned)ml->lp_acc_len);
                 ml->lp_acc_len = 0;
+                ml->h2_acc_len = 0;
                 consumed = 0;
+                proto_err = true;
                 break;
             }
             if (avail < 4 + (size_t)size) break;   /* incomplete - keep for the next read */
