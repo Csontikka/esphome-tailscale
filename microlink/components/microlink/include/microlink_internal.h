@@ -104,6 +104,24 @@ extern "C" {
 #define ML_CTRL_PORT            443
 #define ML_CTRL_PROTOCOL_VER    131
 
+/* Reported to the control plane as Hostinfo.IPNVersion, which tailcfg.go:867
+ * documents as "version of this code (in version.Long format)". Leaving it
+ * unset makes the admin console show no client version at all and refuse
+ * device operations with "Device is too old, please upgrade it" - observed
+ * blocking an IP reassignment on a working node. Deliberately identifies this
+ * client rather than impersonating a tailscale release version. */
+/* Shape matters: tailscale parses this as version.Long(), which is
+ * "x.y.z-tCOMMIT-gCOMMIT" (version/version.go:73-82). Its own tests reject a
+ * string missing the second hash - version_internal_test.go:19-21 accepts
+ * "1.2.3-t01234abcde-g01234abcde" and rejects "1.2.3-t01234abcde" - so an
+ * arbitrary string is simply not displayed, which is what an empty
+ * clientVersion in the admin console looks like.
+ *
+ * Deliberately 0.x with obviously synthetic hashes: correctly shaped so it
+ * parses, while not claiming to be a tailscale release we do not implement.
+ * The OS/OSVersion fields already identify the platform as ESP-IDF. */
+#define ML_IPN_VERSION          "0.5.4-t00000000000-g00000000000"
+
 /* DISCO timing (from tailscaled - MUST match for correct behavior) */
 #define ML_DISCO_PING_INTERVAL_MS       5000
 #define ML_DISCO_HEARTBEAT_MS           3000
