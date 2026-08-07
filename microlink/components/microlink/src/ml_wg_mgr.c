@@ -913,14 +913,29 @@ static void disco_build_ping(microlink_t *ml, int peer_idx,
             pending_probes[i].sent_ms = ml_get_time_ms();
             pending_probes[i].active = true;
             registered = true;
-            ESP_LOGI(TAG, "Probe registered slot=%d peer=%s txid=%02x%02x%02x%02x",
+            ESP_LOGD(TAG, "Probe registered slot=%d peer=%s txid=%02x%02x%02x%02x",
                      i, p->hostname, txid[0], txid[1], txid[2], txid[3]);
             break;
         }
     }
     if (!registered) {
-        ESP_LOGW(TAG, "DISCO probe table full (%d slots), pong will be unmatched",
-                 MAX_PENDING_PROBES);
+        /* Rate-limited: when the table saturates this fires many times a second,
+         * and the logging itself starves the task watchdog (observed: reboot
+         * loop under a DISCO storm from a single busy peer). One line every
+         * 10 s says the same thing without becoming the fault it is reporting.
+         * (Throttle pattern lifted from timmills' #36 series.) */
+        static uint64_t last_full_log_ms = 0;
+        static uint32_t full_suppressed = 0;
+        uint64_t now_ms = ml_get_time_ms();
+        if (now_ms - last_full_log_ms > 10000) {
+            ESP_LOGW(TAG, "DISCO probe table full (%d slots), pong will be unmatched"
+                          " (%lu more suppressed in the last 10s)",
+                     MAX_PENDING_PROBES, (unsigned long)full_suppressed);
+            last_full_log_ms = now_ms;
+            full_suppressed = 0;
+        } else {
+            full_suppressed++;
+        }
     }
 }
 
@@ -1108,7 +1123,7 @@ static void process_disco_ping(microlink_t *ml, const ml_rx_packet_t *pkt,
     /* 3. ALWAYS send via DERP (guaranteed delivery, even if direct worked) */
     ml_derp_queue_send(ml, p->public_key, pong, pong_len);
 
-    ESP_LOGI(TAG, "PONG sent to %s (direct=%s, DERP=yes)",
+    ESP_LOGD(TAG, "PONG sent to %s (direct=%s, DERP=yes)",
              p->hostname, direct_sent ? "yes" : "no");
 }
 
@@ -1267,16 +1282,33 @@ static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
     }
 
     if (!matched) {
-        /* Find peer by disco key for logging */
-        int peer_idx = find_peer_by_disco_key(ml, sender_disco_key);
-        const char *name = peer_idx >= 0 ? ml->peers[peer_idx].hostname : "?";
-        int active_count = 0;
-        for (int i = 0; i < MAX_PENDING_PROBES; i++) {
-            if (pending_probes[i].active) active_count++;
+        /* Rate-limited for the same reason as the probe-table-full warning
+         * above: a peer retrying eagerly against us produces a continuous
+         * unmatched-pong stream, and logging every one of them starved the
+         * task watchdog into a reboot loop (field-observed on the bench under
+         * fire from one aggressive peer). The lookup work is also skipped
+         * while suppressed — it only feeds the log line. */
+        static uint64_t last_unmatched_log_ms = 0;
+        static uint32_t unmatched_suppressed = 0;
+        uint64_t now_ms = ml_get_time_ms();
+        if (now_ms - last_unmatched_log_ms > 10000) {
+            /* Find peer by disco key for logging */
+            int peer_idx = find_peer_by_disco_key(ml, sender_disco_key);
+            const char *name = peer_idx >= 0 ? ml->peers[peer_idx].hostname : "?";
+            int active_count = 0;
+            for (int i = 0; i < MAX_PENDING_PROBES; i++) {
+                if (pending_probes[i].active) active_count++;
+            }
+            ESP_LOGW(TAG, "DISCO PONG unmatched from %s (via %s) txid=%02x%02x%02x%02x, active_probes=%d"
+                          " (%lu more suppressed in the last 10s)",
+                     name, pkt->via_derp ? "DERP" : "direct",
+                     txid[0], txid[1], txid[2], txid[3], active_count,
+                     (unsigned long)unmatched_suppressed);
+            last_unmatched_log_ms = now_ms;
+            unmatched_suppressed = 0;
+        } else {
+            unmatched_suppressed++;
         }
-        ESP_LOGW(TAG, "DISCO PONG unmatched from %s (via %s) txid=%02x%02x%02x%02x, active_probes=%d",
-                 name, pkt->via_derp ? "DERP" : "direct",
-                 txid[0], txid[1], txid[2], txid[3], active_count);
     }
 }
 
