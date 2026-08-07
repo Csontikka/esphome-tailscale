@@ -783,6 +783,23 @@ static int add_peer(microlink_t *ml, const ml_peer_update_t *update) {
     return idx;
 }
 
+/* Called from the DERP task when a relay reports PeerGone. The reference drops
+ * its DERP route for the peer (magicsock/derp.go:652-665); there is no route
+ * table here, so the equivalent is to stop pushing WireGuard handshakes through
+ * a relay that has just said it cannot deliver them. Writing one timestamp from
+ * another task is safe: a torn read costs at most one extra or skipped retry. */
+void ml_wg_mgr_notify_derp_gone(microlink_t *ml, const uint8_t *public_key) {
+    if (!ml || !public_key) return;
+    for (int i = 0; i < ml->peer_count; i++) {
+        if (!ml->peers[i].active) continue;
+        if (memcmp(ml->peers[i].public_key, public_key, 32) != 0) continue;
+        ml->peers[i].derp_gone_until_ms = ml_get_time_ms() + ML_DERP_GONE_BACKOFF_MS;
+        ESP_LOGW(TAG, "Relay reports no path to %s - pausing DERP handshakes for %ds",
+                 ml->peers[i].hostname, ML_DERP_GONE_BACKOFF_MS / 1000);
+        return;
+    }
+}
+
 static void remove_peer(microlink_t *ml, const ml_peer_update_t *update) {
     int idx = find_peer_by_key(ml, update->public_key);
     if (idx < 0) return;
@@ -919,8 +936,24 @@ static void disco_build_ping(microlink_t *ml, int peer_idx,
         }
     }
     if (!registered) {
-        ESP_LOGW(TAG, "DISCO probe table full (%d slots), pong will be unmatched",
-                 MAX_PENDING_PROBES);
+        /* Rate-limited: when the table saturates this fires many times a second,
+         * and on a constrained device the logging itself blocks the main loop
+         * (measured: 3 s stalls, starving the API). One line every 10 s says
+         * the same thing without becoming the fault it is reporting. */
+        {
+            static uint64_t last_full_log_ms = 0;
+            static uint32_t suppressed = 0;
+            uint64_t now_ms = ml_get_time_ms();
+            if (now_ms - last_full_log_ms > 10000) {
+                ESP_LOGW(TAG, "DISCO probe table full (%d slots), pong will be unmatched"
+                              " (%lu more suppressed in the last 10s)",
+                         MAX_PENDING_PROBES, (unsigned long)suppressed);
+                last_full_log_ms = now_ms;
+                suppressed = 0;
+            } else {
+                suppressed++;
+            }
+        }
     }
 }
 
@@ -1151,6 +1184,10 @@ static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
              * we'll switch back to direct (handled by wireguardif_update_endpoint
              * a few lines below with the new pkt->src_ip:src_port). */
             p->derp_fallback_active = false;
+            /* We have heard from this peer, so whatever a relay told us earlier
+             * is stale - resume normal behaviour immediately rather than
+             * waiting out the PeerGone backoff. */
+            p->derp_gone_until_ms = 0;
 
             /* Update WireGuard endpoint to direct path.
              * Always update the stored endpoint. Only force a handshake if we
@@ -1690,6 +1727,38 @@ static void disco_periodic_probes(microlink_t *ml) {
         bool peer_allowed = ml_config_peer_is_allowed(
             ml->config_httpd, p->vpn_ip);
 
+        /* Idle-session gate. The reference stops heartbeating a peer whose
+         * session has gone quiet (magicsock/endpoint.go:835, sessionActiveTimeout
+         * = 45 s) rather than probing peers it is not talking to. Note one
+         * deliberate deviation: the reference gates on lastSendExt (time since
+         * WE last sent), where this gates on max(last_rx, last_tx). A peer that
+         * keeps sending to us therefore stays probed here - more conservative
+         * than the reference, not equivalent to it. Without this
+         * every known peer is probed forever, which on a relay-only device -
+         * where every peer costs a full relay round trip - saturates the
+         * 32-slot probe table permanently and floods the log. Measured on such
+         * a board: active_probes pinned at 32/32 with 4 peers, and the logging
+         * alone blocking the main loop for 3 s at a time.
+         *
+         * Trust expiry below still runs: this gates new probes, not bookkeeping. */
+        bool session_idle = false;
+        if (p->wg_peer_index >= 0 && p->wg_peer_index < WIREGUARD_MAX_PEERS && ml->wg_netif) {
+            struct netif *netif_i = (struct netif *)ml->wg_netif;
+            struct wireguard_device *dev_i = (struct wireguard_device *)netif_i->state;
+            if (dev_i) {
+                struct wireguard_peer *wp_i = &dev_i->peers[p->wg_peer_index];
+                uint32_t now_wg = wireguard_sys_now();
+                uint32_t last_any = wp_i->last_rx;
+                if (wp_i->last_tx > last_any) last_any = wp_i->last_tx;
+                if (last_any != 0) {
+                    uint32_t age = now_wg - last_any;
+                    if (age <= 0x7FFFFFFFu && age > ML_DISCO_SESSION_ACTIVE_MS) {
+                        session_idle = true;
+                    }
+                }
+            }
+        }
+
         /* Check if direct path trust has expired (always runs, not throttled).
          *
          * Throughput-collapse fix (2026-05-24): the old code unconditionally
@@ -1806,6 +1875,12 @@ static void disco_periodic_probes(microlink_t *ml) {
             bool first_attempt = !p->derp_fallback_active;
             bool attempt_due = (p->last_derp_attempt_ms == 0) ||
                                (now - p->last_derp_attempt_ms > 30000);
+            /* A relay that has reported PeerGone for this peer cannot deliver
+             * to it; retrying every 30 s achieves nothing but load on the relay
+             * and the device. */
+            if (p->derp_gone_until_ms != 0 && now < p->derp_gone_until_ms) {
+                attempt_due = false;
+            }
             if (up != ERR_OK && attempt_due) {
                 wireguardif_connect_derp(netif, (u8_t)p->wg_peer_index);
                 p->derp_fallback_active = true;
@@ -1820,7 +1895,7 @@ static void disco_periodic_probes(microlink_t *ml) {
         /* Probe for direct path upgrade (every UPGRADE_INTERVAL when on DERP).
          * Skip on cellular: direct paths impossible through carrier-grade NAT.
          * Throttled to DISCO_PROBES_PER_TICK to spread load and reduce jitter. */
-        if (!ml_at_socket_is_ready() && !p->has_direct_path &&
+        if (!session_idle && !ml_at_socket_is_ready() && !p->has_direct_path &&
             now - p->last_upgrade_ms > ML_DISCO_UPGRADE_INTERVAL_MS) {
             if (upgrade_probes_sent < DISCO_PROBES_PER_TICK) {
                 disco_send_ping_to_peer(ml, i, false);
@@ -1833,7 +1908,7 @@ static void disco_periodic_probes(microlink_t *ml) {
          * MUST use force=true because HEARTBEAT_MS (3s) < PING_INTERVAL_MS (5s),
          * so the rate limiter would always block heartbeat pings.
          * Heartbeats are NEVER throttled — they're time-critical for trust_until_ms. */
-        if (p->has_direct_path &&
+        if (!session_idle && p->has_direct_path &&
             now - p->last_ping_sent_ms > ml->t_disco_heartbeat_ms) {
             disco_send_ping_to_peer(ml, i, true);
         }

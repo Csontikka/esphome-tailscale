@@ -113,6 +113,7 @@ static int ml_derp_bio_send(void *ctx, const unsigned char *buf, size_t len) {
 #define DERP_FRAME_NOTE_PREFERRED 0x07
 #define DERP_FRAME_PEER_GONE    0x08
 #define DERP_FRAME_PING         0x12
+#define DERP_FRAME_HEALTH       0x14   /* server -> client: this connection is unhealthy */
 #define DERP_FRAME_PONG         0x13
 
 /* DISCO magic bytes: "TS" + sparkles emoji UTF-8 */
@@ -354,10 +355,33 @@ static void dispatch_derp_frame(microlink_t *ml, uint8_t frame_type,
         break;
 
     case DERP_FRAME_PEER_GONE:
+        /* 32-byte peer public key + 1 byte reason (derp.go:88). The reason
+         * matters: PeerGoneReasonNotHere (0x01) means this relay has no path
+         * to that peer at all, so continuing to drive WireGuard handshakes
+         * through it is pure waste. The reference removes its DERP route for
+         * the peer in every case (magicsock/derp.go:652-665). */
         if (payload && payload_len >= 32) {
-            ESP_LOGI(TAG, "DERP PeerGone: %02x%02x%02x%02x (len=%d)",
-                     payload[0], payload[1], payload[2], payload[3],
-                     (int)payload_len);
+            uint8_t reason = (payload_len >= 33) ? payload[32] : 0xFF;
+            const char *why = (reason == 0x00) ? "peer disconnected from this relay"
+                            : (reason == 0x01) ? "relay has no path to this peer"
+                            : "unknown reason";
+            ESP_LOGW(TAG, "DERP PeerGone %02x%02x%02x%02x: %s (reason=0x%02x)",
+                     payload[0], payload[1], payload[2], payload[3], why, reason);
+            ml_wg_mgr_notify_derp_gone(ml, payload);
+        }
+        break;
+
+    case DERP_FRAME_HEALTH:
+        /* Server telling us this connection is unhealthy. Its only current use
+         * upstream is duplicate-connection detection (derp.go:117-122) - two
+         * clients on one node key fighting over the same relay session, which
+         * looks exactly like an unreachable node from the outside. Worth
+         * seeing rather than dropping. */
+        if (payload && payload_len > 0) {
+            ESP_LOGW(TAG, "DERP health warning from relay: %.*s",
+                     (int)payload_len, (const char *)payload);
+        } else {
+            ESP_LOGI(TAG, "DERP health warning cleared by relay");
         }
         break;
 

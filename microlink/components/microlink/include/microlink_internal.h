@@ -117,6 +117,14 @@ extern "C" {
 #define ML_DISCO_TRUST_DURATION_MS      60000
 #define ML_DISCO_PING_TIMEOUT_MS        5000
 #define ML_DISCO_UPGRADE_INTERVAL_MS    15000
+
+/* Stop probing a peer whose WireGuard session has carried no traffic for this
+ * long. From tailscale/wgengine/magicsock/magicsock.go:4014
+ * (sessionActiveTimeout): the reference ends heartbeats for an idle session
+ * rather than probing peers it is not talking to.
+ *
+ * This constant already existed here, defined and never used - like
+ * derp.last_recv_ms before the liveness watchdog. Now wired up. */
 #define ML_DISCO_SESSION_ACTIVE_MS      45000
 
 /* STUN servers (Tailscale primary, Google fallback) */
@@ -339,6 +347,11 @@ typedef struct {
      * (e.g. both ends behind the same NAT with no hairpin, or VLAN-isolated). */
     uint64_t peer_added_ms;        /* When this peer entered our state */
     bool derp_fallback_active;     /* Endpoint forced to DERP via update_endpoint(0) */
+
+    /* Set when a relay reports PeerGone for this peer: it has no path there,
+     * so driving handshakes through it is waste. Suppress retries until this
+     * time, then try again in case the peer has come back. */
+    uint64_t derp_gone_until_ms;
     uint64_t last_derp_attempt_ms; /* Last wireguardif_connect_derp() retry, for periodic re-fire */
 
     /* Exit-node advertisement (Phase 1.5e): true if this peer carries
@@ -371,6 +384,25 @@ typedef struct {
 #define ML_H2_MAX_FRAME_LEN     32768
 
 #define ML_MAX_DERP_REGIONS     32
+#define ML_DERP_RTT_HISTORY      3      /* netchecks kept for best-recent latency */
+
+/* Home-DERP stickiness, from tailscale/net/netcheck/netcheck.go:1376-1381.
+ * Changing home DERP is disruptive (peers must be told), so a new region must
+ * be better by BOTH an absolute margin AND a proportional one. */
+#define ML_DERP_SWITCH_MIN_DIFF_MS   10     /* preferredDERPAbsoluteDiff */
+#define ML_DERP_SWITCH_RATIO_NUM     2      /* new must be <= old * 2/3 */
+#define ML_DERP_SWITCH_RATIO_DEN     3
+
+/* A region is still considered reachable if we have heard from it by a
+ * NON-STUN route this recently. tailscale/net/netcheck/netcheck.go:1381
+ * (PreferredDERPFrameTime). Without this a working region that loses one round
+ * of STUN probes reads as dead, and home moves with no hysteresis at all. */
+#define ML_DERP_PREFERRED_FRAME_MS   8000
+
+/* How long to stop driving WireGuard handshakes through a relay that has told
+ * us it has no path to the peer (DERP PeerGone). Long enough to stop the waste,
+ * short enough that a peer coming back is picked up quickly. */
+#define ML_DERP_GONE_BACKOFF_MS      60000
 #define ML_MAX_DERP_NODES       4
 
 typedef struct {
@@ -549,6 +581,28 @@ struct microlink_s {
      * Same index as derp_regions; 0 = no measurement / timed out. */
     uint16_t derp_rtt_ms[ML_MAX_DERP_REGIONS];
 
+    /* Best-recent latency per region, across the last ML_DERP_RTT_HISTORY
+     * netchecks. The reference selects on the best latency seen over a recent
+     * window rather than the newest single probe, so one unlucky sample cannot
+     * move our home region (net/netcheck/netcheck.go:1525 bestRecentLatencyLocked).
+     * Slot 0 is the newest; the ring is rotated on each netcheck. */
+    uint16_t derp_rtt_hist[ML_DERP_RTT_HISTORY][ML_MAX_DERP_REGIONS];
+
+    /* History slots are indexed by position in derp_regions[], so they are only
+     * meaningful while that array's contents are unchanged. Checksum the region
+     * IDs and discard the history whenever the DERPMap changes, rather than
+     * silently attributing one region's latency to another. */
+    uint32_t derp_region_sig;
+
+    /* The region WE have chosen as home, from our own measurements. This is
+     * what gets reported to the control plane in NetInfo.PreferredDERP. */
+    uint16_t derp_preferred_region;
+
+    /* Set when derp_preferred_region changes: the control plane must be told
+     * promptly, because until it is, peers are still being advertised the old
+     * home region and cannot reach us. */
+    bool derp_home_pending_report;
+
     /* ml_get_time_ms() value when state transitioned to CONNECTED. 0 means
      * not currently connected. Used for the GUI tailnet uptime row. */
     uint64_t connected_at_ms;
@@ -682,6 +736,9 @@ void ml_bind_sock_to_upstream(microlink_t *ml, int fd);
 /* ml_wg_mgr.c */
 void ml_wg_mgr_task(void *arg);
 void ml_wg_mgr_send_cmm(microlink_t *ml, uint32_t peer_vpn_ip);
+/* Called from the DERP task when a relay reports PeerGone for a peer: it has
+ * no path there, so stop driving handshakes through it for a while. */
+void ml_wg_mgr_notify_derp_gone(microlink_t *ml, const uint8_t *public_key);
 esp_err_t ml_wg_mgr_trigger_handshake(microlink_t *ml, uint32_t dest_vpn_ip);
 bool ml_wg_mgr_peer_is_up(microlink_t *ml, uint32_t vpn_ip);
 
@@ -695,6 +752,9 @@ esp_err_t ml_stun_send_probe_ipv6(microlink_t *ml, const uint8_t *server_ip6, ui
  * a STUN binding request in parallel, measures RTT, returns the
  * region_id with the lowest RTT. Returns 0 if nothing responded. */
 uint16_t ml_netcheck_pick_best_derp(microlink_t *ml);
+void     ml_netcheck_record_history(microlink_t *ml);
+uint16_t ml_netcheck_best_recent_rtt(const microlink_t *ml, uint16_t region);
+uint16_t ml_netcheck_best_recent_region(const microlink_t *ml);
 bool ml_stun_parse_response(const uint8_t *data, size_t len,
                              uint32_t *out_ip, uint16_t *out_port);
 bool ml_stun_parse_response_ipv6(const uint8_t *data, size_t len,
