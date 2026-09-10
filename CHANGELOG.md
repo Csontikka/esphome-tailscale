@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Changed
+- **One Hostinfo builder** (microlink, internal). The four messages that carry a Hostinfo — RegisterRequest, the initial MapRequest, the long-poll MapRequest, the endpoint update — built it from four hand-copied blocks, which is how `IPNVersion` ended up in only two of them (fixed by hand in 0.5.10 / 0.1.23). They now share one `build_hostinfo()` and cannot drift. No change on the wire for the three map-family messages; the RegisterRequest's Hostinfo only has its keys in the same order as the others and carries the NAT flag when STUN already ran. Verified: admin API hostname / OS / routes unchanged, client version round trip and endpoint updates on both reference devices.
+
 ## [0.5.12] — 2026-09-10
 
 ### Fixed

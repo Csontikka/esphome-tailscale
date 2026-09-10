@@ -1272,6 +1272,41 @@ static int do_h2_preface(microlink_t *ml, ml_noise_state_t *noise) {
  * State: REGISTER - Send RegisterRequest, parse RegisterResponse
  * ========================================================================== */
 
+/* The one Hostinfo builder. The control plane keeps the LAST Hostinfo it
+ * receives, so every message that carries one (RegisterRequest, the initial
+ * MapRequest, the long-poll MapRequest, the endpoint update) must carry the
+ * same fields -- four hand-copied blocks used to drift (IPNVersion was in two
+ * of them, which wiped the client version from the admin console after every
+ * reconnect). NetInfo lives INSIDE Hostinfo: the control plane reads
+ * Hostinfo.NetInfo.PreferredDERP to populate Node.HomeDERP for the peers.
+ * RoutableIPs are the advertised subnet routes (--advertise-routes); each
+ * still needs admin approval before traffic flows. Returns NULL on OOM. */
+static cJSON *build_hostinfo(microlink_t *ml) {
+    cJSON *hostinfo = cJSON_CreateObject();
+    if (!hostinfo) return NULL;
+    const char *dev_name = (ml->config.device_name && ml->config.device_name[0]) ? ml->config.device_name : microlink_default_device_name();
+    cJSON_AddStringToObject(hostinfo, "Hostname", dev_name);
+    if (ml->config.ipn_version && ml->config.ipn_version[0]) {
+        cJSON_AddStringToObject(hostinfo, "IPNVersion", ml->config.ipn_version);
+    }
+    cJSON_AddStringToObject(hostinfo, "OS", "linux");
+    cJSON_AddStringToObject(hostinfo, "OSVersion", "ESP-IDF");
+    cJSON_AddStringToObject(hostinfo, "GoArch", "arm");
+    if (ml->advertise_routes[0]) {
+        cJSON_AddItemToObject(hostinfo, "RoutableIPs",
+                              build_routable_ips_array(ml->advertise_routes));
+    }
+    cJSON *netinfo = cJSON_CreateObject();
+    if (netinfo) {
+        cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
+        if (ml->stun_nat_checked) {
+            cJSON_AddBoolToObject(netinfo, "MappingVariesByDestIP", ml->nat_mapping_varies);
+        }
+        cJSON_AddItemToObject(hostinfo, "NetInfo", netinfo);
+    }
+    return hostinfo;
+}
+
 static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
     int64_t t_reg_start = esp_timer_get_time();
 
@@ -1296,34 +1331,11 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
     }
 
     /* Hostinfo */
-    cJSON *hostinfo = cJSON_CreateObject();
-    const char *dev_name = (ml->config.device_name && ml->config.device_name[0]) ? ml->config.device_name : microlink_default_device_name();
-    cJSON_AddStringToObject(hostinfo, "Hostname", dev_name);
-    if (ml->config.ipn_version && ml->config.ipn_version[0]) {
-        cJSON_AddStringToObject(hostinfo, "IPNVersion", ml->config.ipn_version);
-    }
-    cJSON_AddStringToObject(hostinfo, "OS", "linux");
-    cJSON_AddStringToObject(hostinfo, "OSVersion", "ESP-IDF");
-    cJSON_AddStringToObject(hostinfo, "GoArch", "arm");
-
-    /* NetInfo inside Hostinfo — control plane reads PreferredDERP from here
-     * to populate Node.HomeDERP for other peers */
     {
-        cJSON *netinfo = cJSON_CreateObject();
-        if (netinfo) {
-            cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
-            cJSON_AddItemToObject(hostinfo, "NetInfo", netinfo);
-        }
+        cJSON *hostinfo = build_hostinfo(ml);
+        if (!hostinfo) { cJSON_Delete(root); return -1; }
+        cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
     }
-
-    /* RoutableIPs: subnet routes this node advertises (Tailscale's
-     * --advertise-routes equivalent). Each route still requires admin
-     * approval on the control plane before traffic actually flows. */
-    if (ml->advertise_routes[0]) {
-        cJSON_AddItemToObject(hostinfo, "RoutableIPs",
-                              build_routable_ips_array(ml->advertise_routes));
-    }
-    cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
 
     /* NodeKeyChallengeResponse - prove we own the WireGuard private key
      * Server sends challenge public key in EarlyNoise; we respond with
@@ -2294,35 +2306,11 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
     cJSON_AddBoolToObject(root, "KeepAlive", true);
     cJSON_AddStringToObject(root, "Compress", "");  /* Disable compression */
 
-    /* Hostinfo */
-    cJSON *hostinfo = cJSON_CreateObject();
-    const char *dev_name = (ml->config.device_name && ml->config.device_name[0]) ? ml->config.device_name : microlink_default_device_name();
-    cJSON_AddStringToObject(hostinfo, "Hostname", dev_name);
-    if (ml->config.ipn_version && ml->config.ipn_version[0]) {
-        cJSON_AddStringToObject(hostinfo, "IPNVersion", ml->config.ipn_version);
-    }
-    cJSON_AddStringToObject(hostinfo, "OS", "linux");
-    cJSON_AddStringToObject(hostinfo, "OSVersion", "ESP-IDF");
-    cJSON_AddStringToObject(hostinfo, "GoArch", "arm");
-    /* RoutableIPs: subnet routes this node advertises (Tailscale's
-     * --advertise-routes equivalent). Each route still requires admin
-     * approval on the control plane before traffic actually flows. */
-    if (ml->advertise_routes[0]) {
-        cJSON_AddItemToObject(hostinfo, "RoutableIPs",
-                              build_routable_ips_array(ml->advertise_routes));
-    }
-    cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
-
-    /* NetInfo: tell control plane our preferred DERP region and NAT type.
-     * MUST be inside Hostinfo — the control plane reads Hostinfo.NetInfo.PreferredDERP
-     * to populate Node.HomeDERP for other peers. */
-    cJSON *netinfo = cJSON_CreateObject();
-    if (netinfo) {
-        cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
-        if (ml->stun_nat_checked) {
-            cJSON_AddBoolToObject(netinfo, "MappingVariesByDestIP", ml->nat_mapping_varies);
-        }
-        cJSON_AddItemToObject(hostinfo, "NetInfo", netinfo);
+    /* Hostinfo (NetInfo inside it) */
+    {
+        cJSON *hostinfo = build_hostinfo(ml);
+        if (!hostinfo) { cJSON_Delete(root); return -1; }
+        cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
     }
 
     /* Include endpoints if STUN has already completed (Stream=false →
@@ -2809,41 +2797,10 @@ static int do_start_long_poll(microlink_t *ml, ml_noise_state_t *noise) {
 
     /* Hostinfo - REQUIRED by control plane even for Stream=true.
      * V1 includes this; without it, server may not keep us "online". */
-    cJSON *hostinfo = cJSON_CreateObject();
-    if (hostinfo) {
-        const char *dev_name = (ml->config.device_name && ml->config.device_name[0]) ? ml->config.device_name : microlink_default_device_name();
-        cJSON_AddStringToObject(hostinfo, "Hostname", dev_name);
-        /* Every Hostinfo must carry the same fields as the register/initial
-         * map ones: the control plane keeps the LAST Hostinfo it receives,
-         * so a long-poll or endpoint-update Hostinfo without IPNVersion
-         * wiped the client version from the admin console (and re-armed
-         * its "Device is too old" gate) right after every reconnect. */
-        if (ml->config.ipn_version && ml->config.ipn_version[0]) {
-            cJSON_AddStringToObject(hostinfo, "IPNVersion", ml->config.ipn_version);
-        }
-        cJSON_AddStringToObject(hostinfo, "OS", "linux");
-        cJSON_AddStringToObject(hostinfo, "OSVersion", "ESP-IDF");
-        cJSON_AddStringToObject(hostinfo, "GoArch", "arm");
-        /* RoutableIPs: subnet routes this node advertises (Tailscale's
-     * --advertise-routes equivalent). Each route still requires admin
-     * approval on the control plane before traffic actually flows. */
-    if (ml->advertise_routes[0]) {
-        cJSON_AddItemToObject(hostinfo, "RoutableIPs",
-                              build_routable_ips_array(ml->advertise_routes));
-    }
-    cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
-    }
-
-    /* NetInfo: tell control plane our preferred DERP region and NAT type.
-     * MUST be inside Hostinfo — the control plane reads Hostinfo.NetInfo.PreferredDERP
-     * to populate Node.HomeDERP for other peers. */
-    cJSON *netinfo = cJSON_CreateObject();
-    if (netinfo) {
-        cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
-        if (ml->stun_nat_checked) {
-            cJSON_AddBoolToObject(netinfo, "MappingVariesByDestIP", ml->nat_mapping_varies);
-        }
-        cJSON_AddItemToObject(hostinfo, "NetInfo", netinfo);
+    {
+        cJSON *hostinfo = build_hostinfo(ml);
+        if (!hostinfo) { cJSON_Delete(root); return -1; }
+        cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
     }
 
     /* Stream=true for long-poll, KeepAlive=true so server sends keepalives
@@ -2929,38 +2886,10 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
     cJSON_AddStringToObject(root, "Compress", "");
 
     /* Hostinfo (required — control plane reads NetInfo from here) */
-    cJSON *hostinfo = cJSON_CreateObject();
-    if (hostinfo) {
-        const char *dev_name = (ml->config.device_name && ml->config.device_name[0]) ? ml->config.device_name : microlink_default_device_name();
-        cJSON_AddStringToObject(hostinfo, "Hostname", dev_name);
-        /* Every Hostinfo must carry the same fields as the register/initial
-         * map ones: the control plane keeps the LAST Hostinfo it receives,
-         * so a long-poll or endpoint-update Hostinfo without IPNVersion
-         * wiped the client version from the admin console (and re-armed
-         * its "Device is too old" gate) right after every reconnect. */
-        if (ml->config.ipn_version && ml->config.ipn_version[0]) {
-            cJSON_AddStringToObject(hostinfo, "IPNVersion", ml->config.ipn_version);
-        }
-        cJSON_AddStringToObject(hostinfo, "OS", "linux");
-        cJSON_AddStringToObject(hostinfo, "OSVersion", "ESP-IDF");
-        cJSON_AddStringToObject(hostinfo, "GoArch", "arm");
-        /* RoutableIPs: subnet routes this node advertises (Tailscale's
-     * --advertise-routes equivalent). Each route still requires admin
-     * approval on the control plane before traffic actually flows. */
-    if (ml->advertise_routes[0]) {
-        cJSON_AddItemToObject(hostinfo, "RoutableIPs",
-                              build_routable_ips_array(ml->advertise_routes));
-    }
-    cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
-
-        cJSON *netinfo = cJSON_CreateObject();
-        if (netinfo) {
-            cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
-            if (ml->stun_nat_checked) {
-                cJSON_AddBoolToObject(netinfo, "MappingVariesByDestIP", ml->nat_mapping_varies);
-            }
-            cJSON_AddItemToObject(hostinfo, "NetInfo", netinfo);
-        }
+    {
+        cJSON *hostinfo = build_hostinfo(ml);
+        if (!hostinfo) { cJSON_Delete(root); return -1; }
+        cJSON_AddItemToObject(root, "Hostinfo", hostinfo);
     }
 
     /* Endpoints + EndpointTypes */
