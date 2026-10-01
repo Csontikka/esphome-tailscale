@@ -56,7 +56,7 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 
 ### Hardware
 
-- An **ESP32** board with **PSRAM — required** (recommended: 8 MB Octal PSRAM). Without PSRAM the device cannot allocate the control-plane buffers and will not connect.
+- An **ESP32** board with **PSRAM — required** (recommended: 8 MB Octal PSRAM). Without PSRAM the device cannot send WireGuard packets and cannot fit the control-plane buffers, so it will not connect.
 - **At least 4 MB flash** — enough for the bootloader plus two OTA slots of the ~1 MB firmware. 8 MB or more is only useful if you want to stack other large ESPHome components next to Tailscale.
 
 > **Current testing target:** active development and flashing is being done on **ESP32-S3**. Other ESP32 variants (classic ESP32, ESP32-C3, ESP32-C6, ESP32-P4, …) may work through the upstream [microlink](https://github.com/CamM2325/microlink) library, but most are **not yet verified** by this project. If you get the component running on a non-S3 chip, please open an issue / PR so we can list it here.
@@ -67,7 +67,7 @@ Boards currently verified:
 - **ESP32-S3-N16R8**
 - **AI-Thinker ESP32-CAM** (classic ESP32, 8 MB PSRAM revision) — community-confirmed in [#15](https://github.com/Csontikka/esphome-tailscale/issues/15) by @gastonc. Use `psram: mode: quad speed: 80MHz` (classic ESP32 has no octal PSRAM). Verified to run alongside the ESPHome `esp32_camera` component on the same device with 4 peers online over a direct Tailscale route — RAM and task scheduling fit comfortably with PSRAM enabled.
 
-> **Why PSRAM?** The Tailscale control protocol and WireGuard crypto state together need more contiguous RAM than a stock ESP32 has. The control-plane (HTTP/2 + JSON MapResponse) buffers alone can't be allocated from internal RAM, so **without PSRAM the device fails to fetch the tailnet map and never connects** — PSRAM is a hard requirement, not an optimization.
+> **Why PSRAM?** Two reasons, one hard and one practical. The hard one: the WireGuard send path in the bundled microlink allocates its packet buffers from PSRAM only (a throughput change), so without PSRAM not a single WireGuard packet — not even the handshake — leaves the device. The practical one: fetching and following the tailnet map needs several large contiguous buffers at once (over 200 KB even at the smallest `netmap_buffer_kb: 64`), which a stock ESP32 running ESPHome and WiFi does not have free. **Without PSRAM the device never connects** — PSRAM is a hard requirement, not an optimization.
 
 ### Software
 
@@ -695,7 +695,7 @@ Self-hosted Headscale usually publishes exactly one (embedded) region, in which 
 
 Development and automated validation happen on ESP32-S3 with PSRAM. Other variants are documented as possible by the underlying libraries, but are not currently verified here.
 
-- **PSRAM is required.** The WireGuard crypto buffers, microlink's internal state, and the ESPHome runtime together exceed what stock ESP32 internal RAM can provide — in particular the control-plane buffers can't be allocated from internal RAM, so without PSRAM the device won't connect at all.
+- **PSRAM is required.** The WireGuard send path allocates from PSRAM only, and the control-plane buffers need more contiguous RAM than a stock ESP32 has free next to ESPHome and WiFi, so without PSRAM the device won't connect at all. See [the FAQ](#can-i-run-this-on-a-board-with-no-psram-eg-by-disabling-the-psram-check) for the details.
 - **CPU caps WireGuard throughput at roughly 2–5 Mbit/s** on ESP32-S3. This is ample for sensor telemetry and MQTT payloads, but too slow for image or video streaming through the tailnet.
 - **Flash 4 MB minimum, 8 MB or more recommended.** OTA requires enough free flash to hold a second firmware image alongside the running one.
 
@@ -795,9 +795,14 @@ After flashing, the `Device Memory` sensor should report `PSRAM XXkB` and the VP
 
 ### Can I run this on a board with no PSRAM (e.g. by disabling the PSRAM check)?
 
-**No — PSRAM is a hard requirement, and forcing the check off does not help.** The control-plane (HTTP/2 + JSON) buffers are a fixed 512 KB each and cannot be allocated from internal RAM, so a board without PSRAM never fetches the tailnet map and never connects ([#9](https://github.com/Csontikka/esphome-tailscale/issues/9)).
+**No — PSRAM is a hard requirement, and forcing the check off does not help.** Two things stop a PSRAM-less board ([#9](https://github.com/Csontikka/esphome-tailscale/issues/9), [#48](https://github.com/Csontikka/esphome-tailscale/issues/48)):
 
-A few forks patch the component to hardcode the detected PSRAM size to `0` (forcing the "no PSRAM" code path), hoping it enables a small-buffer mode. **That small-buffer mode was never implemented**, so the patch only guarantees the device can't connect — don't do it. If `Device Memory` reads `Internal RAM` on a board that *does* have PSRAM, that's a PSRAM init/config issue (see the section above), not a reason to bypass the check.
+- **The WireGuard send path is PSRAM-only.** The bundled microlink allocates outgoing WireGuard packets from PSRAM with no fallback to internal RAM, so no packet leaves the device, not even the handshake.
+- **The control plane does not fit in internal RAM.** `netmap_buffer_kb` can shrink the two netmap buffers to 64 KB each, but the initial map fetch still needs three 64 KB blocks at once and the map long-poll keeps about 96 KB + 2 × 64 KB alive. That is well beyond the largest free block of a stock ESP32 running ESPHome and WiFi.
+
+The upstream [microlink](https://github.com/CamM2325/microlink) README describes a 64 KB no-PSRAM mode. That applies to upstream in a bare ESP-IDF app: upstream sends WireGuard packets from internal RAM and its long-poll is lighter. The copy bundled here has diverged on both points, and the no-PSRAM mode has never been tested next to ESPHome.
+
+A few forks patch the component to hardcode the detected PSRAM size to `0`, hoping it enables a small-buffer mode. **That only changes what the device logs and reports**; there is no separate small-buffer code path, so the patch only guarantees the device can't connect — don't do it. If `Device Memory` reads `Internal RAM` on a board that *does* have PSRAM, that's a PSRAM init/config issue (see the section above), not a reason to bypass the check.
 
 Use any ESP32 with PSRAM (e.g. ESP32-S3 `N8R8` / `N16R8` / `N8R2` / `N16R2`).
 
