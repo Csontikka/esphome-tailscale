@@ -46,13 +46,15 @@ static const char *TAG = "ml_coord";
  * except that it fires within a millisecond of the send. Real case (#45): a
  * 2 MB-PSRAM board sharing PSRAM with an audio pipeline could never fit the
  * two 512 KB MapResponse buffers and looped on that message forever. Say what
- * was asked for and what is actually free, and name the knob. */
+ * was asked for and what is actually free, and name the knob.
+ * Kept under ~200 characters: ESPHome truncates log lines from non-main
+ * tasks at 255 characters (task_log_buffer MAX_TEXT_SIZE), and this one is
+ * logged from the coord task. */
 static void log_alloc_failure(const char *what, size_t size)
 {
-    ESP_LOGE(TAG, "%s: cannot allocate %u KB - PSRAM free %u KB (largest block %u KB), "
-                  "internal free %u KB (largest %u KB). Lower CONFIG_ML_H2_BUFFER_SIZE_KB / "
-                  "CONFIG_ML_JSON_BUFFER_SIZE_KB (ESPHome: netmap_buffer_kb) or free the PSRAM "
-                  "held by other components",
+    ESP_LOGE(TAG, "%s: cannot allocate %u KB - PSRAM free %u KB (largest %u KB), "
+                  "internal free %u KB (largest %u KB). Lower netmap_buffer_kb "
+                  "(Kconfig: ML_H2/JSON_BUFFER_SIZE_KB) or free PSRAM",
              what, (unsigned)((size + 1023) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
              (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024),
