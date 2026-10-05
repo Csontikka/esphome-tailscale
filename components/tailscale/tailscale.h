@@ -163,6 +163,13 @@ class TailscaleComponent : public Component {
   std::atomic<microlink_state_t> current_state_{ML_STATE_IDLE};
   std::atomic<bool> state_changed_{false};
   bool psram_available_{false};
+
+ public:
+  /// PSRAM size in bytes, 0 when absent. Chips without PSRAM support (C3, C6)
+  /// do not even link esp_psram_get_size(), hence the wrapper (#48).
+  static size_t psram_size();
+
+ protected:
   bool ip_notify_pending_{false};
   uint32_t last_hint_ms_{0};
   std::string vpn_ip_str_;

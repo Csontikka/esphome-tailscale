@@ -15,7 +15,7 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
-#include "esp_psram.h"
+#include "tailscale.h"
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -111,7 +111,7 @@ static void read_crash_sig() {
   if (esp_core_dump_image_check() != ESP_OK) return;   /* no pending dump */
 
   esp_core_dump_summary_t *sum =
-      (esp_core_dump_summary_t *) heap_caps_malloc(sizeof(*sum), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      (esp_core_dump_summary_t *) heap_caps_malloc_prefer(sizeof(*sum), 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
   if (sum && esp_core_dump_get_summary(sum) == ESP_OK) {
     int n = snprintf(s_crash_sig, sizeof(s_crash_sig),
                      "task=%s pc=0x%08" PRIx32,
@@ -143,7 +143,7 @@ static uint32_t load_and_bump_boot_count() {
 
 static esp_err_t do_send(const char *event_type) {
   uint64_t uptime_s = esp_timer_get_time() / 1000000ULL;
-  int psram = (esp_psram_get_size() > 0) ? 1 : 0;
+  int psram = (TailscaleComponent::psram_size() > 0) ? 1 : 0;
   int connected = s_connected.load() ? 1 : 0;
   bool with_crash = (strcmp(event_type, "boot") == 0) && s_crash_sig[0];
 
@@ -234,7 +234,11 @@ void telemetry_init(bool enabled) {
 
   /* PSRAM stack (TCB stays internal): the task only does HTTPS + NVS reads,
    * never SPI-flash writes, so XIP keeps the cache live. ~8 KB. */
-  xTaskCreateWithCaps(sender_task, "tlm", 8192, nullptr, 3, &s_task, MALLOC_CAP_SPIRAM);
+  /* #48: without PSRAM the stack comes from the default heap instead. */
+  const UBaseType_t stack_caps = TailscaleComponent::psram_size() > 0 ? MALLOC_CAP_SPIRAM : MALLOC_CAP_DEFAULT;
+  if (xTaskCreateWithCaps(sender_task, "tlm", 8192, nullptr, 3, &s_task, stack_caps) != pdPASS) {
+    ESP_LOGW(TAG, "telemetry task not started (out of memory)");
+  }
 }
 
 void telemetry_set_connected(bool connected) {
