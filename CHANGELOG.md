@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.13] — 2026-10-05
+
 ### Added
 - **Experimental no-PSRAM mode** ([#48](https://github.com/Csontikka/esphome-tailscale/issues/48)). A board without PSRAM used to be a dead end three times over: the component did not link on chips without PSRAM support (ESP32-C3/C6), microlink pinned tasks to a second core that a single-core chip does not have (assert at boot), and the WireGuard send path allocated from PSRAM only - and behind those, the netmap fetch wanted three 64 KB blocks at once and the long-poll a 96 KB one. None of that applies any more when there is no PSRAM: the receive buffers are sized from what arrives, the HTTP/2 payload is compacted in place, and the map is parsed one peer and one DERP region at a time, skipping the members the component never reads. Measured on an ESP32-C3 SuperMini: connected to Headscale and to a 14-node Tailscale SaaS tailnet (29 KB map, 28 DERP regions), reachable over the tailnet from another node, 32-74 KB of internal heap free depending on `max_peers`. The map is still buffered whole before it is parsed: a full map update that finds no contiguous block of its size is skipped (logged, session kept) rather than applied. Tight, small tailnets only, and a classic ESP32 without PSRAM is still not expected to fit - see the README FAQ. **Boards with PSRAM are unaffected**: buffer sizes and the single-pass parser are unchanged there. The buffer handling follows a reference patch contributed by @gbertsch.
 
