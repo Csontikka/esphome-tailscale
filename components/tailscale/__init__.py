@@ -67,9 +67,10 @@ CONFIG_SCHEMA = cv.Schema(
         # Set it only to clear the admin console's "Device is too old" gate,
         # e.g. ipn_version: "1.98.9". See README (Troubleshooting).
         cv.Optional(CONF_IPN_VERSION, default=""): cv.string,
-        # Size (KB) of EACH of the two PSRAM buffers microlink allocates for a
-        # netmap fetch (HTTP/2 receive + JSON parse), i.e. about twice this much
-        # contiguous PSRAM at once. The Kconfig default (512) is sized for
+        # Size (KB) of the PSRAM buffer microlink allocates for a netmap fetch
+        # (and afterwards of the long-poll accumulator). Since #48 the fetch
+        # needs one such block, not two. Without PSRAM nothing is pre-allocated
+        # and this is only the upper limit for the tailnet map. The Kconfig default (512) is sized for
         # 300+ peer tailnets; on a 2 MB-PSRAM board that shares PSRAM with
         # other components the 2 x 512 KB allocation fails and every
         # MapRequest dies within milliseconds of a successful registration
