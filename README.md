@@ -45,7 +45,7 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 - **HA API Connection Route sensor** — tells you *how* HA is currently reaching the device: `Tailscale Direct`, `Tailscale DERP`, or `Local`. Great for debugging connectivity.
 - **Node key expiry sensor + warning** — surfaces the node key expiry timestamp from the Tailscale control plane plus a `problem` binary sensor that turns off the moment you click "Disable key expiry".
 - **Runtime auth key override** — change the Tailscale auth key from HA without reflashing. Persisted in NVS across reboots.
-- **PSRAM-backed** — the control-plane and WireGuard buffers live in PSRAM (**PSRAM is required**; supports large tailnets with 50+ peers).
+- **PSRAM-backed** — the control-plane and WireGuard buffers live in PSRAM (strongly recommended; supports large tailnets with 50+ peers). An **experimental no-PSRAM mode** runs a small tailnet from internal RAM on chips with enough of it, such as the ESP32-C3.
 - **Self-healing reconnect** — three-phase recovery (rebind → full restart → reboot) when the tailnet link goes stale.
 - **Auto `use_address` hint** — tells you exactly which line to add to your YAML so HA finds the device over Tailscale after first boot.
 - **Package-based install** — one `packages:` line in your YAML and all entities appear.
@@ -56,7 +56,7 @@ The traditional answer is **subnet routers**: put a Tailscale node on the remote
 
 ### Hardware
 
-- An **ESP32** board with **PSRAM — required** (recommended: 8 MB Octal PSRAM). Without PSRAM the device cannot send WireGuard packets and cannot fit the control-plane buffers, so it will not connect.
+- An **ESP32** board, **preferably with PSRAM** (recommended: 8 MB Octal PSRAM). Without PSRAM the component runs in an experimental mode that only fits a small tailnet — see [the FAQ](#can-i-run-this-on-a-board-with-no-psram-eg-by-disabling-the-psram-check).
 - **At least 4 MB flash** — enough for the bootloader plus two OTA slots of the ~1 MB firmware. 8 MB or more is only useful if you want to stack other large ESPHome components next to Tailscale.
 
 > **Current testing target:** active development and flashing is being done on **ESP32-S3**. Other ESP32 variants (classic ESP32, ESP32-C3, ESP32-C6, ESP32-P4, …) may work through the upstream [microlink](https://github.com/CamM2325/microlink) library, but most are **not yet verified** by this project. If you get the component running on a non-S3 chip, please open an issue / PR so we can list it here.
@@ -67,7 +67,7 @@ Boards currently verified:
 - **ESP32-S3-N16R8**
 - **AI-Thinker ESP32-CAM** (classic ESP32, 8 MB PSRAM revision) — community-confirmed in [#15](https://github.com/Csontikka/esphome-tailscale/issues/15) by @gastonc. Use `psram: mode: quad speed: 80MHz` (classic ESP32 has no octal PSRAM). Verified to run alongside the ESPHome `esp32_camera` component on the same device with 4 peers online over a direct Tailscale route — RAM and task scheduling fit comfortably with PSRAM enabled.
 
-> **Why PSRAM?** Two reasons, one hard and one practical. The hard one: the WireGuard send path in the bundled microlink allocates its packet buffers from PSRAM only (a throughput change), so without PSRAM not a single WireGuard packet — not even the handshake — leaves the device. The practical one: fetching and following the tailnet map needs several large contiguous buffers at once (over 200 KB even at the smallest `netmap_buffer_kb: 64`), which a stock ESP32 running ESPHome and WiFi does not have free. **Without PSRAM the device never connects** — PSRAM is a hard requirement, not an optimization.
+> **Why PSRAM?** Fetching and following the tailnet map needs large buffers, and the JSON parser turns the map into a tree several times its size. With PSRAM those are fixed, generously sized allocations and a tailnet of hundreds of nodes is fine. Without it everything has to come out of what ESPHome, WiFi and two TLS sessions leave free in internal RAM — a few tens of kilobytes — so the buffers are sized from what actually arrives and the map is parsed one peer and one relay region at a time. That works for a small tailnet and is **experimental**; with PSRAM nothing about the memory layout changes.
 
 ### Software
 
@@ -433,7 +433,7 @@ tailscale:
 | `disable_telemetry` | `false` | Set to `true` to turn off the anonymous telemetry (see [Telemetry](#telemetry)). |
 | `netcheck_override` | `false` | Measure the round-trip time to every DERP region and use the fastest one as the node's home relay, instead of the region the control plane reports. See *Picking the DERP region* below before enabling. |
 | `netcheck_override_threshold` | `50ms` | Only switch when the measured region is at least this much faster than the current one. Ignored unless `netcheck_override` is `true`. Prevents flapping between regions with near-identical latency. |
-| `netmap_buffer_kb` | *(unset → 512)* | Size in KB of **each** of the two PSRAM buffers used to fetch the netmap (HTTP/2 receive + JSON parse), so roughly twice this much contiguous PSRAM at once. The 512 KB default is sized for 300+ peer tailnets. On a 2 MB-PSRAM board, or one sharing PSRAM with a display/audio component, that allocation can fail and the device never gets past registration — set `128` (ample below ~50 peers). Range 64–2048. Leave unset unless you need it. |
+| `netmap_buffer_kb` | *(unset → 512)* | Size in KB of the PSRAM buffer used to fetch the netmap (and, afterwards, of the long-poll accumulator); the fetch needs one contiguous block of this size. The 512 KB default is sized for 300+ peer tailnets. On a 2 MB-PSRAM board, or one sharing PSRAM with a display/audio component, that allocation can fail and the device never gets past registration — set `128` (ample below ~50 peers). Range 64–2048. Leave unset unless you need it. Without PSRAM (experimental mode) nothing is pre-allocated; the value is only the upper limit for the tailnet map and defaults to 64 on chips that cannot have PSRAM. |
 
 > **No `update_interval`.** The component is fully event-driven: sensors publish only when the underlying state actually changes. There is no polling loop to tune — and nothing to reduce CPU/network cost by raising.
 
@@ -469,7 +469,7 @@ The `VPN Peers Direct` and `VPN Peers DERP` sensors tell you at a glance how you
 On boot the component queries `esp_psram_get_size()` and reports one of two modes:
 
 - **`PSRAM <size>KB`** — PSRAM detected and initialized; full peer list support, up to 64 peers. This is the required, working state.
-- **`Internal RAM`** — PSRAM was **not** detected/initialized. **The device will not work in this mode**: the control-plane buffers can't be allocated, so it can't fetch the tailnet map. Fix PSRAM init — see [Troubleshooting](#device-memory-shows-internal-ram-even-though-your-board-has-psram) below.
+- **`Internal RAM`** — PSRAM was **not** detected/initialized. The component runs in the **experimental no-PSRAM mode**: all buffers come from internal RAM, which fits a small tailnet on a chip with enough free heap (measured on an ESP32-C3) and nothing more. If your board *does* have PSRAM this is a configuration problem — see [Troubleshooting](#device-memory-shows-internal-ram-even-though-your-board-has-psram) below.
 
 Check the `Device Memory` sensor after first boot to confirm. If you expect PSRAM but see `Internal RAM`, see [Troubleshooting → `Device Memory` shows `Internal RAM` even though your board has PSRAM](#device-memory-shows-internal-ram-even-though-your-board-has-psram).
 
@@ -695,7 +695,7 @@ Self-hosted Headscale usually publishes exactly one (embedded) region, in which 
 
 Development and automated validation happen on ESP32-S3 with PSRAM. Other variants are documented as possible by the underlying libraries, but are not currently verified here.
 
-- **PSRAM is required.** The WireGuard send path allocates from PSRAM only, and the control-plane buffers need more contiguous RAM than a stock ESP32 has free next to ESPHome and WiFi, so without PSRAM the device won't connect at all. See [the FAQ](#can-i-run-this-on-a-board-with-no-psram-eg-by-disabling-the-psram-check) for the details.
+- **PSRAM is strongly recommended.** Without it the component falls back to an experimental mode that takes every buffer from internal RAM. See [the FAQ](#can-i-run-this-on-a-board-with-no-psram-eg-by-disabling-the-psram-check) for what that fits and what it does not.
 - **CPU caps WireGuard throughput at roughly 2–5 Mbit/s** on ESP32-S3. This is ample for sensor telemetry and MQTT payloads, but too slow for image or video streaming through the tailnet.
 - **Flash 4 MB minimum, 8 MB or more recommended.** OTA requires enough free flash to hold a second firmware image alongside the running one.
 
@@ -795,16 +795,31 @@ After flashing, the `Device Memory` sensor should report `PSRAM XXkB` and the VP
 
 ### Can I run this on a board with no PSRAM (e.g. by disabling the PSRAM check)?
 
-**No — PSRAM is a hard requirement, and forcing the check off does not help.** Two things stop a PSRAM-less board ([#9](https://github.com/Csontikka/esphome-tailscale/issues/9), [#48](https://github.com/Csontikka/esphome-tailscale/issues/48)):
+**Experimentally, yes — on a chip with enough internal RAM, and for a small tailnet.** There is no check to disable: a board without PSRAM simply runs in the no-PSRAM mode ([#48](https://github.com/Csontikka/esphome-tailscale/issues/48)).
 
-- **The WireGuard send path is PSRAM-only.** The bundled microlink allocates outgoing WireGuard packets from PSRAM with no fallback to internal RAM, so no packet leaves the device, not even the handshake.
-- **The control plane does not fit in internal RAM.** `netmap_buffer_kb` can shrink the two netmap buffers to 64 KB each, but the initial map fetch still needs three 64 KB blocks at once and the map long-poll keeps about 96 KB + 2 × 64 KB alive. That is well beyond the largest free block of a stock ESP32 running ESPHome and WiFi.
+What was measured, on an **ESP32-C3 SuperMini** (single core, 4 MB flash, no PSRAM) with WiFi, the native API, OTA, the web server and the logger next to the component:
 
-The upstream [microlink](https://github.com/CamM2325/microlink) README describes a 64 KB no-PSRAM mode. That applies to upstream in a bare ESP-IDF app: upstream sends WireGuard packets from internal RAM and its long-poll is lighter. The copy bundled here has diverged on both points, and the no-PSRAM mode has never been tested next to ESPHome.
+| | Free internal heap | Largest free block |
+|---|---|---|
+| Before Tailscale starts | ~205 KB | ~115 KB |
+| Connected, Headscale, 3 peers, `max_peers: 4` | ~45–53 KB | ~21–37 KB |
+| Connected, Tailscale SaaS, 14-node tailnet, `max_peers: 4` | ~74 KB | ~47 KB |
+| Connected, Tailscale SaaS, 14-node tailnet, `max_peers: 16` | ~32–55 KB | ~10–27 KB |
 
-A few forks patch the component to hardcode the detected PSRAM size to `0`, hoping it enables a small-buffer mode. **That only changes what the device logs and reports**; there is no separate small-buffer code path, so the patch only guarantees the device can't connect — don't do it. If `Device Memory` reads `Internal RAM` on a board that *does* have PSRAM, that's a PSRAM init/config issue (see the section above), not a reason to bypass the check.
+In the last row the device was reachable over the tailnet (web server, native API and OTA ports) from another node, with seven peers holding a WireGuard session. That row is also where the limit shows: the control plane re-sends the full ~28 KB map over the long-poll every few minutes, and with sixteen peer slots in use there is often no contiguous block that large. Such an update is then **skipped** (a warning is logged, the session stays up, small delta updates still apply), so peer changes can arrive late.
 
-Use any ESP32 with PSRAM (e.g. ESP32-S3 `N8R8` / `N16R8` / `N8R2` / `N16R2`).
+What that means in practice:
+
+- **It is tight.** Tens of kilobytes of headroom, not hundreds. Another memory-hungry component (Bluetooth proxy, camera, display, audio) may not fit next to it.
+- **`max_peers` is the main lever.** Each slot costs internal RAM, and the more slots are in use the less room is left for the tailnet map itself. But a node that does not get a slot cannot reach the device, so on a tailnet larger than `max_peers` only the first `max_peers` nodes of the map can connect. A small tailnet (or a tagged, ACL-restricted node that only sees a few peers) is the case this mode is for.
+- **The whole tailnet map still has to fit in one piece.** It is buffered before it is parsed, so it needs a contiguous free block of its own size — about 29 KB for a 14-node tailnet. `netmap_buffer_kb` is only the upper limit (64 KB by default on chips without PSRAM support). If the *first* map after connecting does not fit, the device cannot connect; a later full update that does not fit is skipped as described above. A tailnet of hundreds of nodes will not fit.
+- **Classic ESP32 without PSRAM is not expected to work** next to ESPHome: its internal heap is split into separate regions and the largest free block is too small. Not measured on hardware.
+- **ESP32-C6** has more internal RAM than the C3 and should fare better; it has not been measured here.
+- **Throughput is lower** than on an ESP32-S3: one 160 MHz core does the WireGuard and the handshake cryptography.
+
+How it works, in short: without PSRAM the receive buffers are sized from what actually arrives instead of being fixed 64–512 KB blocks, the HTTP/2 payload is compacted in place instead of being copied into a second buffer, and the map is parsed one peer and one relay region at a time, skipping the parts the component never reads. With PSRAM none of this is used and the memory layout is exactly what it was. The buffer handling follows a reference patch contributed by [@gbertsch](https://github.com/gbertsch) in #48.
+
+If `Device Memory` reads `Internal RAM` on a board that *does* have PSRAM, that is a PSRAM init/config issue (see the section above) — fix that rather than running a PSRAM board in this mode.
 
 ### Registration succeeds but the device never connects (`MapRequest failed, will retry`)
 
@@ -865,7 +880,7 @@ tailscale:
   max_peers: 32  # or 48, or 64
 ```
 
-PSRAM is required regardless; a higher `max_peers` just uses more memory (64 is the hard cap; each slot costs ~1 KB in the peer tables).
+A higher `max_peers` just uses more memory (64 is the hard cap; each slot costs ~1 KB in the peer tables). That is irrelevant with PSRAM and matters a lot without it: in the experimental no-PSRAM mode keep `max_peers` as low as your use allows.
 
 > **Version note:** on **0.5.1 and earlier**, `max_peers` above 16 did not actually take effect in the WireGuard layer — peers 17+ were discovered (Tailscale `ping` answered) but could never carry TCP, and *which* 16 peers worked was re-shuffled every boot. If you run a tailnet with more than 16 nodes, update to a release newer than 0.5.1 before raising this value.
 
