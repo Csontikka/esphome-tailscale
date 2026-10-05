@@ -3919,10 +3919,22 @@ void ml_coord_task(void *arg) {
                 if (!ml->derp.connected) {
                     /* Signal DERP I/O task to connect (connection now owned by I/O task) */
                     xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
-                    /* Wait for DERP to connect (up to 15s) before continuing */
+                    /* Wait for DERP to connect (up to 15s) before continuing.
+                     * Also wake on a stop request: once the DERP I/O task has
+                     * exited, ML_EVT_DERP_CONNECTED never comes, and this wait
+                     * is exactly as long as microlink_stop() is willing to
+                     * wait for us - a stop arriving here used to be reported
+                     * as "1 task(s) still running 15000 ms after the stop
+                     * request" (measured: the coord task signed off 100 ms
+                     * after the deadline). */
                     ESP_LOGI(TAG, "Waiting for DERP I/O task to connect...");
-                    xEventGroupWaitBits(ml->events, ML_EVT_DERP_CONNECTED,
-                                        pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
+                    EventBits_t derp_wb = xEventGroupWaitBits(ml->events,
+                                        ML_EVT_DERP_CONNECTED | ML_EVT_SHUTDOWN_REQUEST,
+                                        pdFALSE, pdFALSE, pdMS_TO_TICKS(15000));
+                    if (derp_wb & ML_EVT_SHUTDOWN_REQUEST) {
+                        ESP_LOGI(TAG, "Stop requested while waiting for DERP - not continuing the connect");
+                        break;   /* leaves the state switch; the task loop sees the bit and exits */
+                    }
                 }
 
                 /* Start streaming long-poll for incremental updates */

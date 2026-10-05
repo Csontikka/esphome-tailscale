@@ -72,6 +72,17 @@ static uint32_t resolve_v4(const char *hostname) {
     return ip;
 }
 
+/* The netcheck runs on the coord task right after the first netmap and can
+ * take NETCHECK_TIMEOUT_MS (28 DNS lookups, probes, three retry sweeps). A
+ * stop request that arrived meanwhile used to wait it out: microlink_stop()
+ * gave up after 15 s with the coord task still in here, and the instance was
+ * leaked on purpose (~650 KB of PSRAM and ~7 KB of internal RAM for every
+ * reconnect landing within half a minute of the previous connect). Every loop
+ * below checks this instead. */
+static inline bool netcheck_stop_requested(microlink_t *ml) {
+    return ml->events && (xEventGroupGetBits(ml->events) & ML_EVT_SHUTDOWN_REQUEST);
+}
+
 uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     if (!ml || ml->derp_region_count == 0) return 0;
 
@@ -124,6 +135,7 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     int regions = ml->derp_region_count < NETCHECK_MAX_PROBES ?
                   ml->derp_region_count : NETCHECK_MAX_PROBES;
     for (int i = 0; i < regions; i++) {
+        if (netcheck_stop_requested(ml)) break;
         ml_derp_region_t *r = &ml->derp_regions[i];
         if (r->region_id == 0) continue;
         const char *host = NULL;
@@ -168,7 +180,7 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     uint64_t next_retry_at = esp_timer_get_time() + (uint64_t)NETCHECK_RETRY_GAP_MS * 1000ULL;
     int retries_done = 0;
 
-    while (esp_timer_get_time() < deadline) {
+    while (esp_timer_get_time() < deadline && !netcheck_stop_requested(ml)) {
         uint64_t now = esp_timer_get_time();
 
         /* Retry sweep: re-send to any region we haven't heard from yet.
@@ -177,6 +189,7 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
         if (retries_done < NETCHECK_MAX_RETRIES && now >= next_retry_at) {
             int retried = 0;
             for (int i = 0; i < probe_count; i++) {
+                if (netcheck_stop_requested(ml)) break;
                 if (probes[i].got_response) continue;
                 uint8_t pkt[40];
                 size_t pkt_len = build_stun_binding(pkt, probes[i].txid);
@@ -202,6 +215,8 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
         now = esp_timer_get_time();
         if (wait_until <= now) continue;
         uint64_t remain = wait_until - now;
+        /* Short slices so a stop request is seen within a quarter second. */
+        if (remain > 250000ULL) remain = 250000ULL;
 
         fd_set rfds; FD_ZERO(&rfds); FD_SET(sock, &rfds);
         struct timeval tv;
@@ -258,6 +273,10 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
         }
     }
     close(sock);
+    if (netcheck_stop_requested(ml)) {
+        ESP_LOGI(TAG, "aborted: stop requested");
+        return 0;
+    }
 
     uint32_t best_rtt = UINT32_MAX;
     uint16_t best_region = 0;

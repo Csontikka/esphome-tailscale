@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **A full restart shortly after a connect leaked the whole instance** (microlink). Right after the first netmap the coord task runs the netcheck — a DNS lookup and a STUN probe per DERP region plus retry sweeps, up to 25 s — and then waits up to 15 s for the DERP connection. Neither looked at the stop request. `microlink_stop()` waited its 15 s, found the coord task still alive and marked the stop incomplete, and `microlink_destroy()` then skipped the free on purpose; the task did exit moments later, but the flag was never cleared. Anything that fully stops the instance inside that window was affected: setting or clearing the runtime auth key, switching the VPN off, a reconnect whose rebind fails and escalates to a full restart. (The *Reconnect* button alone only rebinds and was not.) Measured with two restarts 20 s apart, three times over: an ESP32-S3 lost ~8 KB of internal RAM and ~31 KB of PSRAM each time; an ESP32-C3 without PSRAM could no longer fetch the netmap after the first and failed to start at all after the second, staying down until a reboot. Now the netcheck gives up as soon as a stop is requested (it waits in slices of at most 250 ms), the DERP wait wakes on the stop request too, and a stop that does see every task sign off clears the flag so a late clean stop still frees the instance. Same test afterwards: no memory lost on either board, and the stop completes in under 300 ms instead of timing out at 15 s. The netcheck and stop-flag part comes from the microlink fork (`ff1b3f9`).
+
 ## [0.5.13] — 2026-10-05
 
 ### Added

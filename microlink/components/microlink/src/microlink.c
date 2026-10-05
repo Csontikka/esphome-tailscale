@@ -556,6 +556,10 @@ esp_err_t microlink_stop(microlink_t *ml) {
             ml->stop_incomplete = true;
         } else {
             ESP_LOGI(TAG, "All tasks exited (%d ms)", waited);
+            /* microlink_destroy() stops again before it frees. If an earlier
+             * stop timed out but every task has signed off by now, nothing
+             * runs on the instance any more and it can be freed after all. */
+            ml->stop_incomplete = false;
         }
     }
 
