@@ -194,7 +194,13 @@ static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct
 	 * DRAM, the alloc fails (ERR_MEM, errno=-1) and the packet drops.
 	 * SPIRAM has 8 MB headroom; per-packet latency is ~10 us extra,
 	 * negligible vs the rest of the WG path. */
-	#define WG_OUT_ALLOC(sz)  heap_caps_malloc((sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+	/* #48: a board without PSRAM has no SPIRAM heap at all and used to get
+	 * ERR_MEM on every packet, handshake included - it takes the default
+	 * heap instead. A PSRAM board keeps SPIRAM-only, exactly as before
+	 * (no silent spill into internal DRAM when SPIRAM is exhausted). */
+	static int8_t wg_out_no_spiram = -1;
+	if (wg_out_no_spiram < 0) wg_out_no_spiram = (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) ? 1 : 0;
+	#define WG_OUT_ALLOC(sz)  heap_caps_malloc((sz), wg_out_no_spiram ? MALLOC_CAP_DEFAULT : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))
 	#define WG_OUT_FREE(p)    heap_caps_free(p)
 
 	// Check if peer has a direct endpoint (non-zero IP and port)

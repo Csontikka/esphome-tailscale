@@ -295,7 +295,12 @@ static err_t wg_udp_output_cb(uint32_t dest_ip, uint16_t dest_port,
     ml_spiram_pbuf_t *wrap = heap_caps_malloc(sizeof(*wrap),
                                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!wrap) return ERR_MEM;
-    wrap->data_spiram = heap_caps_malloc(total_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    /* #48: SPIRAM as before; the default heap only on a board that has no
+     * SPIRAM heap at all. */
+    static int8_t no_spiram = -1;
+    if (no_spiram < 0) no_spiram = (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) ? 1 : 0;
+    wrap->data_spiram = heap_caps_malloc(total_len, no_spiram ? MALLOC_CAP_DEFAULT
+                                                              : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!wrap->data_spiram) {
         heap_caps_free(wrap);
         return ERR_MEM;

@@ -53,6 +53,16 @@ extern "C" {
  * wg_mgr ~4.3K. Trimmed only the clearly-oversized ones, keeping a generous
  * margin over the observed peak (TLS handshakes can spike). coord/wg_mgr
  * left as-is — they run closer to their ceiling. */
+/* #48: single-core chips (ESP32-C3/C6, ...) have no core 1; pinning a task
+ * there asserts in xTaskCreatePinnedToCore at boot. ML_CORE(n) folds the
+ * second core onto core 0 when the build is unicore, and is the identity on
+ * dual-core chips. */
+#if CONFIG_FREERTOS_UNICORE || (defined(portNUM_PROCESSORS) && portNUM_PROCESSORS == 1)
+#define ML_CORE(n) 0
+#else
+#define ML_CORE(n) (n)
+#endif
+
 #define ML_TASK_NET_IO_STACK    (6 * 1024)   /* was 8K; ~3K peak observed */
 #define ML_TASK_NET_IO_PRIO     7
 #define ML_TASK_NET_IO_CORE     0
@@ -63,11 +73,11 @@ extern "C" {
 
 #define ML_TASK_COORD_STACK     (12 * 1024)
 #define ML_TASK_COORD_PRIO      5
-#define ML_TASK_COORD_CORE      1
+#define ML_TASK_COORD_CORE      ML_CORE(1)
 
 #define ML_TASK_WG_MGR_STACK    (8 * 1024)
 #define ML_TASK_WG_MGR_PRIO     7
-#define ML_TASK_WG_MGR_CORE     1
+#define ML_TASK_WG_MGR_CORE     ML_CORE(1)
 
 /* Queue depths */
 /* TX 16->64 (2026-05-27): absorb speedtest bursts so packets queue instead of
@@ -628,9 +638,13 @@ struct microlink_s {
      * payload is split across two reads must be completed, not dropped. */
     uint8_t *h2_acc;
     size_t   h2_acc_len;
+    size_t   h2_acc_cap;     /* allocated size (#48: not fixed without PSRAM) */
 
-    uint8_t *lp_acc;         /* PSRAM, ML_JSON_BUFFER_SIZE, lazily allocated */
+    uint8_t *lp_acc;         /* PSRAM: ML_JSON_BUFFER_SIZE + 1, lazily allocated;
+                              * no PSRAM (#48): grown on demand, freed when empty */
     size_t   lp_acc_len;
+    size_t   lp_acc_cap;     /* allocated size */
+    size_t   lp_skip;        /* #48, no PSRAM: bytes of a too-large message still to discard */
 
     /* Key expiry (parsed from MapResponse self-node) */
     int64_t key_expiry_epoch;       /* Unix epoch seconds, 0 = no expiry */

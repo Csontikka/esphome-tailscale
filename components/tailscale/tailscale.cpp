@@ -6,7 +6,9 @@
 #ifdef USE_API
 #include "esphome/components/api/api_server.h"
 #endif
+#ifdef CONFIG_SPIRAM
 #include "esp_psram.h"
+#endif
 #include "esp_heap_caps.h"
 #include "sdkconfig.h"
 #include <cstdio>
@@ -54,6 +56,14 @@ void TailscaleComponent::apply_debug_log(bool enabled) {
   ESP_LOGI(TAG, "Microlink debug log: %s", enabled ? "ON" : "OFF");
 }
 
+size_t TailscaleComponent::psram_size() {
+#ifdef CONFIG_SPIRAM
+  return esp_psram_get_size();
+#else
+  return 0;
+#endif
+}
+
 void TailscaleComponent::setup() {
   bool debug_on = false;
 #ifdef USE_SWITCH
@@ -65,7 +75,7 @@ void TailscaleComponent::setup() {
   ESP_LOGI(TAG, "Initializing Tailscale (MicroLink)...");
 
   // Runtime PSRAM detection
-  size_t psram_size = esp_psram_get_size();
+  size_t psram_size = TailscaleComponent::psram_size();
   if (psram_size > 0) {
     this->psram_available_ = true;
     ESP_LOGI(TAG, "PSRAM detected: %u KB - using large buffers", (unsigned)(psram_size / 1024));
@@ -83,7 +93,9 @@ void TailscaleComponent::setup() {
       const unsigned largest_kb = (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024);
       ESP_LOGI(TAG, "Netmap buffers: %u KB + %u KB (PSRAM free now: %u KB, largest block %u KB)",
                h2_kb, json_kb, free_kb, largest_kb);
-      if (largest_kb < biggest_kb || free_kb < h2_kb + json_kb + 128) {
+      // The fetch needs ONE buffer since #48 (it used to be two plus a 64 KB
+      // scratch); the long-poll accumulator of the same size comes after it.
+      if (largest_kb < biggest_kb || free_kb < biggest_kb + 128) {
         ESP_LOGW(TAG, "Free PSRAM is too small or too fragmented for the netmap buffers - the netmap fetch "
                       "will fail after registration. Set `netmap_buffer_kb: 128` (enough below ~50 peers) "
                       "or free PSRAM held by other components.");
@@ -91,13 +103,24 @@ void TailscaleComponent::setup() {
     }
   } else {
     this->psram_available_ = false;
-    ESP_LOGE(TAG, "No PSRAM detected — Tailscale requires PSRAM and will NOT connect on this board.");
+    // #48: experimental no-PSRAM mode. Every buffer comes from internal RAM and
+    // is sized from what actually arrives; netmap_buffer_kb is only the upper
+    // limit. Fits a small tailnet on a chip with enough free heap (measured on
+    // an ESP32-C3), not a classic ESP32 next to other large components.
+    ESP_LOGW(TAG, "No PSRAM - EXPERIMENTAL no-PSRAM mode: buffers come from internal RAM "
+                  "(free %u KB, largest block %u KB). Netmap limit %u KB.",
+             (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned) (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned) CONFIG_ML_H2_BUFFER_SIZE_KB);
+#ifdef CONFIG_SPIRAM
+    // This chip family can have PSRAM, so "none" may also be a config mistake.
     ESP_LOGW(TAG, "If your board has PSRAM but it's not initialized, add an explicit psram block to your YAML:");
     ESP_LOGW(TAG, "    psram:");
     ESP_LOGW(TAG, "      mode: octal");
     ESP_LOGW(TAG, "      speed: 80MHz    # for N8R8 / N16R8 modules (most common)");
     ESP_LOGW(TAG, "  or, for N8R2 / N16R2 modules: 'mode: quad speed: 40MHz'.");
     ESP_LOGW(TAG, "ESPHome's psram block forces the configured mode — pick the one that matches your hardware.");
+#endif
   }
 
   // Load runtime auth key override from NVS (if user set one via HA)
@@ -738,7 +761,7 @@ void TailscaleComponent::publish_state_() {
   this->publish_auth_key_status_();
   if (this->memory_mode_sensor_ != nullptr && this->memory_mode_sensor_->state.empty()) {
     // Memory mode never changes - publish once
-    size_t psram = esp_psram_get_size();
+    size_t psram = TailscaleComponent::psram_size();
     if (psram > 0) {
       char buf[32];
       snprintf(buf, sizeof(buf), "PSRAM %uKB", (unsigned)(psram / 1024));
