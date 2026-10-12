@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.16] — 2026-10-12
+
 ### Fixed
 - **An expired node key is replaced, not fatal.** When the control plane answered a registration with `NodeKeyExpired` (Tailscale expires node keys after 180 days by default unless "Disable key expiry" is set), the component gave up with a log line that sent you to the auth key — which was fine — and to a factory reset. The reference client simply generates a new node key and registers it again; the component now does the same with the auth key from the config. That brings the device back if the key is reusable or still unused; an exhausted single-use key fails the retry with the control plane's own error, which then is the right hint. If the key expires while the device is running, the instance is restarted so the new key reaches the WireGuard interface and the DERP session too.
 
