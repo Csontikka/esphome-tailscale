@@ -141,6 +141,13 @@ class TailscaleComponent : public Component {
 
   void publish_state_();
   void start_microlink_();
+  /// Detach the running instance (callbacks off, cached state back to idle)
+  /// and stop + destroy it in a background task.
+  void detach_and_stop_instance_();
+  /// Create the background stop task for pending_stop_ml_; false if it could not be created.
+  bool spawn_stop_task_();
+  /// A start attempt failed: schedule the next one instead of giving up.
+  void start_failed_(const char *what);
   void check_ip_config_(const char *vpn_ip);
   void send_ip_notification_();
   std::string detect_ha_route_(std::string *out_ip = nullptr);
@@ -178,6 +185,14 @@ class TailscaleComponent : public Component {
   uint32_t connection_count_{0};
   uint32_t last_sensor_publish_ms_{0};
   uint32_t microlink_start_ms_{0};
+  // An instance that still has to be stopped but whose stop task could not be
+  // created yet (out of memory); retried from loop().
+  microlink_t *pending_stop_ml_{nullptr};
+  // Start retry after a failed start: consecutive failures, when the last one
+  // happened, and how long to wait before the next attempt (0 = no wait).
+  uint8_t start_failures_{0};
+  uint32_t start_failed_ms_{0};
+  uint32_t start_retry_wait_ms_{0};
   bool registration_failed_logged_{false};
   bool initial_publish_done_{false};
   std::atomic<bool> vpn_stopping_{false};

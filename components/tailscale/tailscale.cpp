@@ -157,9 +157,67 @@ void TailscaleComponent::setup() {
   ESP_LOGI(TAG, "Waiting for network before starting...");
 }
 
+bool TailscaleComponent::spawn_stop_task_() {
+  if (this->pending_stop_ml_ == nullptr)
+    return true;
+  s_stop_in_progress.store(true);
+  s_stop_start_ms = millis();
+  if (xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, this->pending_stop_ml_, 1, nullptr, 0) != pdPASS) {
+    // Typically out of memory. The instance must still be stopped before a
+    // new one may start; loop() tries again.
+    return false;
+  }
+  this->pending_stop_ml_ = nullptr;
+  return true;
+}
+
+void TailscaleComponent::detach_and_stop_instance_() {
+  if (this->ml_ == nullptr)
+    return;
+  s_active_ml.store(nullptr);
+  microlink_set_state_callback(this->ml_, nullptr, nullptr);
+  microlink_set_peer_callback(this->ml_, nullptr, nullptr);
+  this->pending_stop_ml_ = this->ml_;
+  this->ml_ = nullptr;
+  // The cached state is only ever updated by the instance's callback, which is
+  // now off: without this a "connected" from the old instance would be
+  // reported until a new instance says otherwise - forever, if none starts.
+  this->current_state_ = ML_STATE_IDLE;
+  this->connected_since_ms_ = 0;
+  this->state_changed_ = true;
+  if (!this->spawn_stop_task_()) {
+    ESP_LOGE(TAG, "Could not create the stop task (out of memory?) - will retry");
+  }
+}
+
+void TailscaleComponent::start_failed_(const char *what) {
+  static constexpr uint32_t WAIT_MS[] = {5000, 10000, 20000, 40000, 60000};
+  uint8_t idx = this->start_failures_ < 4 ? this->start_failures_ : 4;
+  if (this->start_failures_ < 255)
+    this->start_failures_++;
+  this->start_failed_ms_ = millis();
+  this->start_retry_wait_ms_ = WAIT_MS[idx];
+  this->current_state_ = ML_STATE_IDLE;
+  this->connected_since_ms_ = 0;
+  this->state_changed_ = true;
+  ESP_LOGE(TAG, "%s (attempt %u; internal heap free %u KB, largest block %u KB) - retrying in %u s",
+           what, (unsigned) this->start_failures_,
+           (unsigned) (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned) (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned) (this->start_retry_wait_ms_ / 1000));
+  this->status_set_error();
+}
+
 void TailscaleComponent::start_microlink_() {
   if (this->ml_ != nullptr)
     return;  // Already started
+  if (this->pending_stop_ml_ != nullptr && !this->spawn_stop_task_())
+    return;  // the previous instance is not even being stopped yet
+  if (this->start_retry_wait_ms_ != 0) {
+    if (millis() - this->start_failed_ms_ < this->start_retry_wait_ms_)
+      return;  // backing off after a failed start
+    this->start_retry_wait_ms_ = 0;
+  }
   if (s_stop_in_progress.load()) {
     if (millis() - s_stop_start_ms > STOP_TIMEOUT_MS) {
       ESP_LOGW(TAG, "Stop task stuck for %us, force-clearing", (unsigned)(STOP_TIMEOUT_MS / 1000));
@@ -212,8 +270,10 @@ void TailscaleComponent::start_microlink_() {
   this->ml_ = microlink_init(&config);
   ESP_LOGI(TAG, "microlink_init returned: %p", (void*)this->ml_);
   if (this->ml_ == nullptr) {
-    ESP_LOGE(TAG, "Failed to initialize MicroLink!");
-    this->mark_failed();
+    // Used to be mark_failed(): the component then never ran again and the
+    // VPN stayed down until a reboot, although the cause (usually memory) is
+    // often transient.
+    this->start_failed_("Failed to initialize MicroLink");
     return;
   }
 
@@ -223,9 +283,30 @@ void TailscaleComponent::start_microlink_() {
 
   esp_err_t err = microlink_start(this->ml_);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to start MicroLink: %d", err);
-    this->mark_failed();
+    // microlink_start() may have created some of its tasks before it failed
+    // (they are created one by one); those have to be stopped and the
+    // instance freed, not abandoned. Done right here rather than in the
+    // background stop task: a start usually fails for lack of memory, and
+    // then there is none for that task's stack either - measured on an
+    // ESP32-C3, the half-started instance held the last 33 KB and nothing
+    // could release it. The tasks created so far are idle and leave on the
+    // stop request within milliseconds; microlink_destroy() stops them,
+    // waits, and frees the instance.
+    s_active_ml.store(nullptr);
+    microlink_set_state_callback(this->ml_, nullptr, nullptr);
+    microlink_set_peer_callback(this->ml_, nullptr, nullptr);
+    microlink_t *failed_ml = this->ml_;
+    this->ml_ = nullptr;
+    microlink_destroy(failed_ml);
+    char what[48];
+    snprintf(what, sizeof(what), "Failed to start MicroLink (%d)", (int) err);
+    this->start_failed_(what);
     return;
+  }
+  if (this->start_failures_ != 0) {
+    ESP_LOGI(TAG, "MicroLink started after %u failed attempt(s)", (unsigned) this->start_failures_);
+    this->start_failures_ = 0;
+    this->status_clear_error();
   }
 
   this->microlink_start_ms_ = millis();
@@ -238,6 +319,12 @@ void TailscaleComponent::start_microlink_() {
 }
 
 void TailscaleComponent::loop() {
+  // An instance whose stop task could not be created earlier still has to be
+  // stopped, whether or not a new one is wanted.
+  if (this->pending_stop_ml_ != nullptr) {
+    this->spawn_stop_task_();
+  }
+
   // Start microlink only after network is connected (and user hasn't disabled)
   if (this->ml_ == nullptr && network::is_connected()) {
     if (this->tailscale_user_enabled_ && !this->vpn_stopping_) {
@@ -297,14 +384,7 @@ void TailscaleComponent::loop() {
     }
 #endif
     if (!this->tailscale_user_enabled_ && this->ml_ != nullptr) {
-      s_active_ml.store(nullptr);
-      microlink_set_state_callback(this->ml_, nullptr, nullptr);
-      microlink_set_peer_callback(this->ml_, nullptr, nullptr);
-      microlink_t *old_ml = this->ml_;
-      this->ml_ = nullptr;
-      s_stop_in_progress.store(true);
-      s_stop_start_ms = millis();
-      xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
+      this->detach_and_stop_instance_();
     }
     this->state_changed_ = true;
   }
@@ -376,14 +456,7 @@ void TailscaleComponent::loop() {
           this->reconnect_phase_ = RECONNECT_IDLE;
         } else if (elapsed > 15000) {
           ESP_LOGW(TAG, "Reconnect: rebind failed after 15s, trying full restart...");
-          s_active_ml.store(nullptr);
-          microlink_set_state_callback(this->ml_, nullptr, nullptr);
-          microlink_set_peer_callback(this->ml_, nullptr, nullptr);
-          microlink_t *old_ml = this->ml_;
-          this->ml_ = nullptr;
-          s_stop_in_progress.store(true);
-      s_stop_start_ms = millis();
-          xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
+          this->detach_and_stop_instance_();
           this->reconnect_phase_ = RECONNECT_FULL;
           this->reconnect_start_ms_ = millis();
           // Will re-init in next loop() via start_microlink_()
@@ -882,18 +955,8 @@ void TailscaleComponent::set_tailscale_enabled(bool enabled) {
     this->set_timeout("tailscale_stop", 300, [this]() {
       if (this->ml_ != nullptr) {
         ESP_LOGI(TAG, "Stopping Tailscale now");
-        s_active_ml.store(nullptr);
-        microlink_set_state_callback(this->ml_, nullptr, nullptr);
-        microlink_set_peer_callback(this->ml_, nullptr, nullptr);
-        microlink_t *old_ml = this->ml_;
-        this->ml_ = nullptr;
         this->vpn_stopping_ = false;
-        this->current_state_ = ML_STATE_IDLE;
-        this->connected_since_ms_ = 0;
-        this->state_changed_ = true;
-        s_stop_in_progress.store(true);
-      s_stop_start_ms = millis();
-        xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
+        this->detach_and_stop_instance_();
       }
     });
   } else if (enabled && this->ml_ == nullptr) {
@@ -926,13 +989,7 @@ void TailscaleComponent::request_reconnect() {
   esp_err_t err = microlink_rebind(this->ml_);
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "Rebind call failed (%d), escalating to full restart...", err);
-    s_active_ml.store(nullptr);
-    microlink_set_state_callback(this->ml_, nullptr, nullptr);
-    microlink_set_peer_callback(this->ml_, nullptr, nullptr);
-    microlink_t *old_ml = this->ml_;
-    this->ml_ = nullptr;
-    s_stop_in_progress.store(true);
-    xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
+    this->detach_and_stop_instance_();
     this->reconnect_phase_ = RECONNECT_FULL;
     this->reconnect_start_ms_ = millis();
   }
@@ -1071,6 +1128,7 @@ void TailscaleComponent::try_save_auth_key_() {
 
 void TailscaleComponent::save_runtime_auth_key_(const std::string &key) {
   this->reconnect_phase_ = RECONNECT_IDLE;
+  this->start_retry_wait_ms_ = 0;  // a new key: do not sit out a start backoff
   time_t now = ::time(nullptr);
   int64_t timestamp = (now > 1700000000) ? (int64_t)now : 0;
 
@@ -1111,17 +1169,10 @@ void TailscaleComponent::save_runtime_auth_key_(const std::string &key) {
   // Restart VPN with new key
   if (this->ml_ != nullptr) {
     ESP_LOGI(TAG, "Restarting VPN with %s auth key...", key.empty() ? "default" : "new");
-    s_active_ml.store(nullptr);
-    microlink_set_state_callback(this->ml_, nullptr, nullptr);
-    microlink_set_peer_callback(this->ml_, nullptr, nullptr);
-    microlink_t *old_ml = this->ml_;
-    this->ml_ = nullptr;
     this->connection_count_ = 0;
     this->microlink_start_ms_ = 0;
     this->registration_failed_logged_ = false;
-    s_stop_in_progress.store(true);
-    s_stop_start_ms = millis();
-    xTaskCreatePinnedToCore(microlink_stop_task, "ml_stop", 4096, old_ml, 1, nullptr, 0);
+    this->detach_and_stop_instance_();
   }
 }
 
