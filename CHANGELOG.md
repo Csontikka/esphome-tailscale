@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.15] — 2026-10-12
+
 ### Fixed
 - **A failed start no longer takes the VPN down until the next reboot.** When the instance could not be started — in practice: not enough free memory at that moment — the component marked itself failed, which stops ESPHome from running it at all; nothing short of a reboot brought the VPN back, even once the memory was there again. It now retries with a backoff (5, 10, 20, 40, then every 60 s) and logs each attempt with the free heap. Two things on the way there were worse than "failed": if memory ran out while the instance was being set up, its own cleanup read from a queue that had never been created and the device rebooted on an assert; and if it ran out while the tasks were being created, the ones already running were abandoned along with the instance's memory. Both are cleaned up properly now. Measured on an ESP32-C3 with the heap squeezed on purpose: four failed attempts, heap unchanged between them, device reachable throughout, tunnel back about 40 s after the memory was released; the released 0.5.14 rebooted in the same test.
 - **`VPN Connected` no longer shows a connection that is gone.** The component caches the connection state and only the running instance updates it. Switching the VPN off reset the cache, but a restart for a new auth key or after a failed rebind did not, so the sensor kept saying "on" until the new instance reported in — and for good if it never started. Every path that stops the instance now resets it: after an auth-key restart the sensor turns off in 0.2 s (it never did within 12 s before).
