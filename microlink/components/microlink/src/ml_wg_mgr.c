@@ -1419,13 +1419,30 @@ static void process_disco_packet(microlink_t *ml, const ml_rx_packet_t *pkt) {
     if (!plaintext) return;
 
     if (nacl_box_open_afternm(plaintext, ciphertext, ciphertext_len, nonce, shared) != 0) {
-        /* The sender is a known peer, so a MAC failure means OUR key material
-         * for it is stale (#31); the prefix lets it be correlated externally. */
-        ESP_LOGW(TAG, "DISCO decrypt failed (from %s via %s, disco_key=%02x%02x%02x%02x...)",
-                 ml->peers[sender_idx].hostname,
-                 pkt->via_derp ? "DERP" : "direct",
-                 sender_disco_key[0], sender_disco_key[1],
-                 sender_disco_key[2], sender_disco_key[3]);
+        /* The sender is a known peer and its key is current, so the box was
+         * sealed for someone else. The usual case: two nodes behind one NAT
+         * both advertised the same public endpoint at different times, and the
+         * sender still probes the stale one - a message meant for the other
+         * node lands here. The reference client drops these silently
+         * ("wrong rcpt?"); one line a minute keeps a real key-material
+         * problem (#31) visible without a WARN per probe. */
+        static uint64_t last_wrong_rcpt_log_ms = 0;
+        static uint32_t wrong_rcpt_suppressed = 0;
+        uint64_t now_ms = ml_get_time_ms();
+        if (now_ms - last_wrong_rcpt_log_ms > 60000) {
+            ESP_LOGW(TAG, "DISCO from %s (via %s, disco_key=%02x%02x%02x%02x...) not sealed for us - "
+                          "usually a stale endpoint shared with another node behind the same NAT; "
+                          "dropped (%lu more in the last 60 s)",
+                     ml->peers[sender_idx].hostname,
+                     pkt->via_derp ? "DERP" : "direct",
+                     sender_disco_key[0], sender_disco_key[1],
+                     sender_disco_key[2], sender_disco_key[3],
+                     (unsigned long)wrong_rcpt_suppressed);
+            last_wrong_rcpt_log_ms = now_ms;
+            wrong_rcpt_suppressed = 0;
+        } else {
+            wrong_rcpt_suppressed++;
+        }
         free(plaintext);
         return;
     }
