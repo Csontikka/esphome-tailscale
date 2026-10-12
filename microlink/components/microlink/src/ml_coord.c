@@ -178,6 +178,9 @@ static void bytes_to_hex(const uint8_t *bytes, size_t len, char *hex) {
     hex[len * 2] = '\0';
 }
 
+static void self_node_expiry(microlink_t *ml, cJSON *resp, cJSON *node);
+static void check_key_expired(microlink_t *ml, bool expired_flag);
+
 static int hex_to_bytes(const char *hex, uint8_t *bytes, size_t max_len) {
     size_t hex_len = strlen(hex);
     if (hex_len % 2 != 0 || hex_len / 2 > max_len) return -1;
@@ -3047,38 +3050,7 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
                 ESP_LOGI(TAG, "Our WG pubkey (local):  nodekey:%.32s...", our_hex);
             }
 
-            /* Parse KeyExpiry (ISO 8601: "YYYY-MM-DDTHH:MM:SSZ") */
-            cJSON *key_expiry = cJSON_GetObjectItem(node, "KeyExpiry");
-            if (key_expiry && key_expiry->valuestring) {
-                int yr, mo, dy, hr, mn, sc;
-                if (sscanf(key_expiry->valuestring, "%d-%d-%dT%d:%d:%d",
-                           &yr, &mo, &dy, &hr, &mn, &sc) >= 6) {
-                    /* Simple epoch calculation (approximate, no leap second) */
-                    /* Days from year 1970 */
-                    int64_t days = 0;
-                    for (int y = 1970; y < yr; y++) {
-                        days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
-                    }
-                    static const int mdays[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
-                    for (int m = 1; m < mo; m++) {
-                        days += mdays[m];
-                        if (m == 2 && (yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0))) days++;
-                    }
-                    days += dy - 1;
-                    ml->key_expiry_epoch = days * 86400 + hr * 3600 + mn * 60 + sc;
-                    ESP_LOGI(TAG, "Key expiry: %s (epoch: %lld)", key_expiry->valuestring,
-                             (long long)ml->key_expiry_epoch);
-                }
-            }
-
-            /* Check Expired flag */
-            cJSON *expired = cJSON_GetObjectItem(node, "Expired");
-            if (expired && cJSON_IsTrue(expired)) {
-                ml->key_expired = true;
-                ESP_LOGW(TAG, "Node key is EXPIRED — re-registration needed");
-            } else {
-                ml->key_expired = false;
-            }
+            self_node_expiry(ml, map_json, node);
         }
     }
 
@@ -3292,11 +3264,82 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
 /* Apply one fully-decoded MapResponse from the long-poll stream.
  * Extracted from poll_map_update so the caller can drive it once per COMPLETE message rather than
  * once per socket read. See the reassembly note on microlink_t::lp_acc. */
+/* ISO 8601 "YYYY-MM-DDTHH:MM:SS[.frac]Z" -> Unix epoch seconds (no leap seconds). */
+static bool iso8601_to_epoch(const char *str, int64_t *out) {
+    int yr, mo, dy, hr, mn, sc;
+    if (!str || sscanf(str, "%d-%d-%dT%d:%d:%d", &yr, &mo, &dy, &hr, &mn, &sc) < 6)
+        return false;
+    int64_t days = 0;
+    for (int y = 1970; y < yr; y++)
+        days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+    static const int mdays[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+    for (int m = 1; m < mo && m <= 12; m++) {
+        days += mdays[m];
+        if (m == 2 && (yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0))) days++;
+    }
+    days += dy - 1;
+    *out = days * 86400 + hr * 3600 + mn * 60 + sc;
+    return true;
+}
+
+/* The control plane's clock, advanced from the last ControlTime we received; 0 if none yet. */
+static int64_t control_now(const microlink_t *ml) {
+    if (ml->control_time_epoch == 0) return 0;
+    return ml->control_time_epoch + (int64_t)((ml_get_time_ms() - ml->control_time_rx_ms) / 1000);
+}
+
+/* Our own node key has expired: the control plane says so (Node.Expired), or
+ * KeyExpiry has passed by the control plane's clock - the reference client
+ * computes it the same way, the flag itself is not sent. Do what we do for
+ * RegisterResponse.NodeKeyExpired: a new key, saved, and the application
+ * restarts the instance so it registers with it right away - instead of
+ * sitting "connected" with the peers already gone until the control plane
+ * drops the map session (about two minutes on Tailscale SaaS) and only the
+ * re-registration after that finds out. */
+static void check_key_expired(microlink_t *ml, bool expired_flag) {
+    int64_t cnow = control_now(ml);
+    bool expired = expired_flag ||
+                   (ml->key_expiry_epoch > 0 && cnow > 0 && cnow >= ml->key_expiry_epoch);
+    if (expired && !ml->key_expired && !ml->restart_requested) {
+        ESP_LOGW(TAG, "Node key expired (%s) - a new one is saved, the instance has to be restarted",
+                 expired_flag ? "Node.Expired" : "KeyExpiry reached by the control clock");
+        ml_rotate_node_key(ml);
+        ml->restart_requested = true;   /* once per instance: the new one registers with the new key */
+    }
+    ml->key_expired = expired;
+}
+
+/* MapResponse.ControlTime + our Node's KeyExpiry/Expired - from the initial map and from
+ * stream updates alike (a key expiry set through the admin console arrives on the stream). */
+static void self_node_expiry(microlink_t *ml, cJSON *resp, cJSON *node) {
+    cJSON *ct = cJSON_GetObjectItem(resp, "ControlTime");
+    int64_t epoch;
+    if (ct && cJSON_IsString(ct) && iso8601_to_epoch(ct->valuestring, &epoch)) {
+        ml->control_time_epoch = epoch;
+        ml->control_time_rx_ms = ml_get_time_ms();
+    }
+    bool expired_flag = false;
+    if (node) {
+        cJSON *key_expiry = cJSON_GetObjectItem(node, "KeyExpiry");
+        if (key_expiry && cJSON_IsString(key_expiry) && iso8601_to_epoch(key_expiry->valuestring, &epoch)) {
+            if (epoch != ml->key_expiry_epoch) {
+                ml->key_expiry_epoch = epoch;
+                ESP_LOGI(TAG, "Key expiry: %s (epoch %lld, control clock %lld)", key_expiry->valuestring,
+                         (long long)epoch, (long long)control_now(ml));
+            }
+        }
+        cJSON *expired = cJSON_GetObjectItem(node, "Expired");
+        expired_flag = expired && cJSON_IsTrue(expired);
+    }
+    check_key_expired(ml, expired_flag);
+}
+
 static void apply_long_poll_map(microlink_t *ml, cJSON *update_json) {
     ESP_LOGI(TAG, "Long-poll MapResponse update received");
 
     /* Update VPN IP if present */
     cJSON *node = cJSON_GetObjectItem(update_json, "Node");
+    self_node_expiry(ml, update_json, node);
     if (node) {
         cJSON *addresses = cJSON_GetObjectItem(node, "Addresses");
         if (addresses && cJSON_GetArraySize(addresses) > 0) {
@@ -4168,24 +4211,13 @@ void ml_coord_task(void *arg) {
                     last_derp_keepalive_ms = now;
                 }
 
-                /* Key expiry check (every 60s) — re-register if expired */
-                if (ml->key_expiry_epoch > 0 || ml->key_expired) {
+                /* Key expiry check (every 10 s) against the control plane's clock:
+                 * the expiry may pass while the stream is quiet. */
+                if (ml->key_expiry_epoch > 0 && !ml->key_expired) {
                     static uint64_t last_expiry_check_ms = 0;
-                    if (now - last_expiry_check_ms > 60000) {
+                    if (now - last_expiry_check_ms > 10000) {
                         last_expiry_check_ms = now;
-                        if (ml->key_expired) {
-                            if (ml->config.auth_key) {
-                                ESP_LOGW(TAG, "Key expired, re-registering with auth_key...");
-                                state = COORD_RECONNECTING;
-                                break;
-                            } else {
-                                ESP_LOGE(TAG, "Key expired but no auth_key — manual re-provisioning needed!");
-                            }
-                        }
-                        /* Warn 1 hour before expiry (rough uptime-based check) */
-                        /* Note: key_expiry_epoch is absolute Unix time, we compare with
-                         * approximate boot-relative time. For accurate check we'd need
-                         * SNTP, but this catches the Expired flag from the server. */
+                        check_key_expired(ml, false);
                     }
                 }
 

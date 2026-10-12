@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **A node key that expires while the device is running is replaced right away.** The control plane does not flag the expiry; the reference client works it out from the node's `KeyExpiry` and the control plane's own clock (`ControlTime`) so that no synced local clock is needed - the component now does the same, on the initial map, on every stream update, and every 10 s in between. Before, the device sat "connected" with the peers already gone until the control plane dropped the map session (about two minutes on Tailscale SaaS) and only the re-registration after that found out. Measured on an ESP32-S3 with the key expired through the API: `VPN Connected` off within a second, new key registered, tunnel back in 37 s.
+
 ## [0.5.16] — 2026-10-12
 
 ### Fixed
