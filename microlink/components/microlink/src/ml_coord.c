@@ -1671,14 +1671,26 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
         cJSON *exp_j = cJSON_GetObjectItem(resp_json, "NodeKeyExpired");
         if (exp_j && cJSON_IsTrue(exp_j)) {
             /* The reference regenerates the node key and re-registers
-             * automatically here (direct.go:890-897 returns regen=true). We do
-             * not implement automatic regeneration, so this is fatal and needs
-             * operator action - a microlink divergence, not reference behaviour. */
-            ESP_LOGE(TAG, "RegisterResponse.NodeKeyExpired - this node key is no "
-                          "longer accepted. microlink does not regenerate keys "
-                          "automatically: run microlink_factory_reset + reboot.");
+             * (direct.go:890-897, regen=true). Same here: the auth key from
+             * the config is still at hand, so the new key is registered with
+             * it on the next attempt. A reusable key, or a single-use key
+             * that is still unused, gets the device back; an exhausted one
+             * fails that attempt with RegisterResponse.Error, which is the
+             * right message then. Used to be fatal ("run factory reset"). */
             cJSON_Delete(resp_json);
-            return -1;
+            ml_rotate_node_key(ml);
+            if (ml->wg_netif != NULL) {
+                /* Expired while running: the WireGuard interface and the DERP
+                 * session hold the old key and cannot be re-keyed in place.
+                 * The application restarts the instance. */
+                ESP_LOGW(TAG, "RegisterResponse.NodeKeyExpired - the node key expired while running; "
+                              "a new one is saved, the instance has to be restarted");
+                ml->restart_requested = true;
+                return -1;
+            }
+            ESP_LOGW(TAG, "RegisterResponse.NodeKeyExpired - the node key expired; "
+                          "re-registering with a new one using the auth key");
+            return -1;   /* -> COORD_RECONNECTING -> register again */
         }
 
         cJSON *url_j = cJSON_GetObjectItem(resp_json, "AuthURL");

@@ -121,6 +121,23 @@ static esp_err_t load_or_generate_keys(microlink_t *ml) {
     return ESP_OK;
 }
 
+void ml_rotate_node_key(microlink_t *ml) {
+    generate_keypair(ml->wg_private_key, ml->wg_public_key);
+    ESP_LOGI(TAG, "Generated a new node key (nodekey:%02x%02x%02x%02x...)",
+             ml->wg_public_key[0], ml->wg_public_key[1], ml->wg_public_key[2], ml->wg_public_key[3]);
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        /* Same as at boot: the key still works, it just does not survive a reboot. */
+        ESP_LOGW(TAG, "NVS open failed (%d), the new node key is not persisted", err);
+        return;
+    }
+    nvs_set_blob(nvs, NVS_KEY_WG_PRI, ml->wg_private_key, 32);
+    nvs_set_blob(nvs, NVS_KEY_WG_PUB, ml->wg_public_key, 32);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
 /* ============================================================================
  * cJSON PSRAM Hooks
  * ========================================================================== */
@@ -660,6 +677,10 @@ void microlink_destroy(microlink_t *ml) {
 
 void ml_task_exiting(microlink_t *ml) {
     if (ml) __atomic_sub_fetch(&ml->tasks_alive, 1, __ATOMIC_SEQ_CST);
+}
+
+bool microlink_restart_requested(const microlink_t *ml) {
+    return ml != NULL && ml->restart_requested;
 }
 
 microlink_state_t microlink_get_state(const microlink_t *ml) {

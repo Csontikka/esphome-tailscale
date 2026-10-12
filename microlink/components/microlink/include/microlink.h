@@ -196,6 +196,16 @@ void microlink_destroy(microlink_t *ml);
 microlink_state_t microlink_get_state(const microlink_t *ml);
 
 /**
+ * @brief True when the instance has to be stopped and started again
+ *
+ * Set when the control plane reported the node key as expired while the
+ * instance was running: a new key was generated and saved, but the WireGuard
+ * interface and the DERP session still use the old one. Stop and destroy this
+ * instance and start a new one - it registers with the new key.
+ */
+bool microlink_restart_requested(const microlink_t *ml);
+
+/**
  * @brief Check if connected and ready to send/receive
  */
 bool microlink_is_connected(const microlink_t *ml);

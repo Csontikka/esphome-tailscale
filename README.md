@@ -111,7 +111,7 @@ Copy the key (starts with `tskey-auth-...`) — you'll paste it into your ESPHom
 > Tailscale has **two** different kinds of key, and they're easy to confuse:
 >
 > - **Auth key** (`tskey-auth-...`) — a *one-time ticket* that lets a new device register itself with your tailnet. The ESP only uses this on its very first boot, to prove to the control plane "I'm allowed to join". **After the first successful registration the auth key is no longer needed for normal operation** — the device has received its own private **node key** and talks to the tailnet with that from then on. Tailscale still shows the auth key in the admin console with a 90-day max expiry, but this does **not** kick the device off the tailnet when it expires — it only stops *new* devices from being able to register with the same key.
-> - **Node key** — the per-device long-term identity, generated and stored on the ESP itself (in NVS). This is the key that actually keeps the device authenticated on the tailnet. **This one *does* have its own expiry**, and by default Tailscale expires node keys after ~180 days, after which the device is kicked off the tailnet and needs to be re-authenticated (which means re-flashing or re-running the auth flow — ugly on an unattended sensor at a remote cabin).
+> - **Node key** — the per-device long-term identity, generated and stored on the ESP itself (in NVS). This is the key that actually keeps the device authenticated on the tailnet. **This one *does* have its own expiry**, and by default Tailscale expires node keys after ~180 days, after which the device is kicked off the tailnet. The component then generates a new node key and registers it with the auth key from your config — which only works if that key is still usable: a **reusable** key that has not expired, or a single-use key that was never consumed. With a used-up or expired auth key the device stays off the tailnet until you give it a new one (the **VPN Auth Key Override** text entity in HA, no re-flash needed) — not what you want from an unattended sensor at a remote cabin.
 >
 > **What this means in practice:**
 >
@@ -120,7 +120,7 @@ Copy the key (starts with `tskey-auth-...`) — you'll paste it into your ESPHom
 > 3. **Reboot the ESP** (press the Reboot button in HA or power-cycle it). The updated expiry status is only fetched from the control plane during a fresh login — a simple reconnect is not enough. After the reboot, the **VPN Node Key Expiry Warning** sensor should turn off and the **VPN Setup Hint** will switch from the key-expiry URL to the `use_address` hint.
 > 4. After that, the auth key is basically discardable — if it expires, nothing happens to the already-registered device. You only need a new auth key if you want to flash *another* ESP, or re-register this one from scratch (e.g. after `esptool erase_flash`).
 >
-> If you skip step 2, everything will *look* fine for months, and then one day the device silently drops off the tailnet and you'll have no idea why. **Disable node key expiry. Always. For every ESP you flash.**
+> If you skip step 2, everything will *look* fine for months, and then one day the device drops off the tailnet — and only comes back by itself if the auth key in its config is still usable. **Disable node key expiry. Always. For every ESP you flash.**
 
 ### 2. Install the component
 

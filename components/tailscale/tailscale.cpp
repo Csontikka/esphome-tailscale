@@ -325,6 +325,16 @@ void TailscaleComponent::loop() {
     this->spawn_stop_task_();
   }
 
+  // microlink had to replace an expired node key while running: the new key is
+  // saved, but only a new instance registers with it.
+  if (this->ml_ != nullptr && microlink_restart_requested(this->ml_)) {
+    ESP_LOGW(TAG, "Node key replaced - restarting the VPN instance");
+    this->connection_count_ = 0;
+    this->microlink_start_ms_ = 0;
+    this->registration_failed_logged_ = false;
+    this->detach_and_stop_instance_();
+  }
+
   // Start microlink only after network is connected (and user hasn't disabled)
   if (this->ml_ == nullptr && network::is_connected()) {
     if (this->tailscale_user_enabled_ && !this->vpn_stopping_) {

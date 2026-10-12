@@ -483,6 +483,12 @@ struct microlink_s {
      * through microlink_factory_reset. */
     bool identity_persistent;
 
+    /* Set by the coord task when it had to replace an expired node key while
+     * the WireGuard interface and the DERP session were already set up with
+     * the old one - neither can be re-keyed in place, so the application
+     * restarts the instance (the new key is in NVS by then). */
+    volatile bool restart_requested;
+
     /* Identity from the last RegisterResponse — for display only. A failed
      * registration is detected from RegisterResponse.Error / NodeKeyExpired /
      * AuthURL (the fields the reference client acts on), NOT from this block:
@@ -723,6 +729,9 @@ void ml_derp_disconnect(microlink_t *ml);
  * vTaskDelete(NULL): after it returns the task must not touch ml again,
  * because microlink_stop() may already be tearing the instance down. */
 void ml_task_exiting(microlink_t *ml);
+/* Generate a new WireGuard (node) keypair and persist it; the control plane
+ * said the old one expired. */
+void ml_rotate_node_key(microlink_t *ml);
 esp_err_t ml_derp_queue_send(microlink_t *ml, const uint8_t *dest_key,
                               const uint8_t *data, size_t len);
 
