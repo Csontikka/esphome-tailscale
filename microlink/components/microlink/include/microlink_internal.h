@@ -654,7 +654,12 @@ struct microlink_s {
 
     /* Key expiry (parsed from MapResponse self-node) */
     int64_t key_expiry_epoch;       /* Unix epoch seconds, 0 = no expiry */
-    bool key_expired;               /* true if Node.Expired == true */
+    bool key_expired;               /* Node.Expired, or KeyExpiry reached by the control clock */
+    /* MapResponse.ControlTime: the control plane's clock, so that KeyExpiry
+     * can be checked without a synced local clock (the reference client does
+     * the same). Advanced locally from the moment it was received. */
+    int64_t control_time_epoch;     /* 0 = never received */
+    uint64_t control_time_rx_ms;
 
     /* Resolved timing (set during init from config, 0 = default) */
     uint32_t t_disco_heartbeat_ms;
