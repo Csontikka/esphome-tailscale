@@ -1211,7 +1211,11 @@ void ml_derp_disconnect(microlink_t *ml) {
 
     /* Drain TX queue */
     ml_derp_tx_item_t item;
-    while (xQueueReceive(ml->derp_tx_queue, &item, 0) == pdTRUE) {
+    /* The queue may not exist: microlink_init() calls microlink_destroy() when
+     * creating the queues fails (out of memory), and reading a NULL queue
+     * asserts in xQueueReceive - the device rebooted instead of reporting a
+     * failed start. */
+    while (ml->derp_tx_queue && xQueueReceive(ml->derp_tx_queue, &item, 0) == pdTRUE) {
         free(item.data);
     }
 
