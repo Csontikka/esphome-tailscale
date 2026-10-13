@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.19] — 2026-10-13
+
 ### Fixed
 - **A closed map session is noticed at once.** When the control plane closes the long-poll stream (`RST_STREAM`) or the whole connection (`GOAWAY`), the admin console shows the node offline from that moment; the component did not recognise either frame and kept the session until the stream-liveness watchdog gave up minutes later, with pings on the other streams keeping the transport looking alive. Both frames now trigger an immediate reconnect. Ported from upstream microlink PR #40 (antonmeyer).
 - **Netmap buffers below 64 KB no longer break the connection.** With `CONFIG_ML_H2_BUFFER_SIZE_KB` set below 64 through `sdkconfig_options` the connection-window update underflowed to a ~4 GB delta and the control plane answered with `GOAWAY` right after registration; the proactive window update also never fired below 64 KB and a netmap that did not fit the buffer was silently stitched together from non-contiguous frames instead of being cut off with a warning. Ported from upstream microlink PR #35 (ViniciusDev26). The YAML option `netmap_buffer_kb` always had a 64 KB minimum and was not affected.
