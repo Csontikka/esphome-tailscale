@@ -153,7 +153,14 @@ void ml_net_io_task(void *arg) {
             int n = ml_recvfrom(ml->disco_sock4, udp_buf, sizeof(udp_buf), 0,
                              (struct sockaddr *)&src_addr, &addr_len);
             if (n > 0) {
-                uint8_t *pkt_data = malloc(n);
+                /* PSRAM, not plain malloc(): with SPIRAM_MALLOC_ALWAYSINTERNAL
+                 * a ~1.4 KB copy lands in internal RAM, and this socket also
+                 * carries the WireGuard data plane. A download through an exit
+                 * node fills wg_rx_queue (32 deep) faster than the WG task
+                 * drains it, so up to ~45 KB of internal RAM sat in queued
+                 * copies -- free internal RAM measured down to 4.5 KB on the
+                 * reference router, where the WiFi driver's buffers live. */
+                uint8_t *pkt_data = ml_psram_malloc(n);
                 if (pkt_data) {
                     memcpy(pkt_data, udp_buf, n);
                     uint32_t src_ip = ntohl(src_addr.sin_addr.s_addr);

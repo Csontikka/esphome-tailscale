@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **Incoming WireGuard packets are queued in PSRAM, not in internal RAM.** The UDP socket that carries disco also carries the WireGuard data plane; every received packet was copied with a plain `malloc()` before being handed to the WireGuard task, and in an ESPHome build `malloc()` never goes to PSRAM - so under load the 32-deep receive queue held up to ~45 KB of the internal RAM the WiFi driver and TLS allocate from. The copies now come from PSRAM (with the usual fallback to internal RAM on boards without it). Measured on an ESP32-S3 flooded through the tunnel: the lowest free internal RAM during the flood went from 58 KB to 105 KB and the largest free block no longer collapsed from 32 KB to 8 KB; throughput and loss unchanged. Ported from the microlink fork (commit `b3d56f9`).
+
 ## [0.5.17] — 2026-10-12
 
 ### Fixed
