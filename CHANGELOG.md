@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Documentation
+- **README: "Related projects" section** placing this component next to the microlink forks (TailTiny, fugo101), the alfs/tailscale-iot proof of concept, the Rust implementations and the sibling subnet-router project, and a note in Development on which fixes were ported from the forks and upstream pull requests, with credits. The GitHub repository now has a description and topics.
+
 ## [0.5.22] — 2026-10-13
 
 ### Security

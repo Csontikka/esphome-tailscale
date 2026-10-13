@@ -722,6 +722,23 @@ End users who pin to a released tag or a specific commit do not need any of thes
 
 ---
 
+## Related projects
+
+Several projects put Tailscale on an ESP32; they solve different problems, so here is where this one sits (as of October 2026).
+
+| Project | What it is | How it differs |
+|---|---|---|
+| [CamM2325/microlink](https://github.com/CamM2325/microlink) | The C library this component is built on (ts2021, WireGuard, DERP, DISCO). | Upstream has been dormant since March 2026; the copy vendored here carries fixes from its forks and open pull requests, see [Development](#development). |
+| [Asimmimx/tailtiny](https://github.com/Asimmimx/tailtiny) | A maintained, renamed fork of microlink for ESP-IDF projects; tested on the ESP32-C3 without PSRAM. | A library, not an ESPHome component: you write the firmware. No Headscale support documented. |
+| [fugo101/microlink](https://github.com/fugo101/microlink) | A microlink fork for ESP-IDF 6 / mbedTLS 4, published on the ESP Component Registry. | Library for ESP-IDF 6 projects; ESPHome builds on ESP-IDF 5 for now. |
+| [alfs/tailscale-iot](https://github.com/alfs/tailscale-iot) | An ESPHome-based proof of concept for Headscale on the ESP32-C3. | Direct UDP only (no DERP relay), no activity since December 2025. |
+| [punnerud/tailscale-mpe-rust](https://github.com/punnerud/tailscale-mpe-rust), [0xdilo/tailscale-esp32](https://github.com/0xdilo/tailscale-esp32) | Independent Rust implementations of a Tailscale node for the ESP32-S3. | Rust firmware, not ESPHome; the second implements tailnet lock. |
+| [Csontikka/esp32-tailscale-subnet-router](https://github.com/Csontikka/esp32-tailscale-subnet-router) | Sibling project: an ESP32-S3 as a WiFi NAT + Tailscale subnet router / exit node, configured from a web UI. | For putting a whole LAN behind the ESP; this component is for the ESP itself as a node. The [KamilDz1990 fork](https://github.com/KamilDz1990/esphome-tailscale) of this component adds a subnet-gateway mode to ESPHome. |
+
+What only this component does, as far as we know: a Tailscale **and** Headscale node as a drop-in ESPHome external component with the full data plane (direct WireGuard, DERP fallback, DISCO), Home Assistant entities for everything, and an experimental no-PSRAM mode for the ESP32-C3.
+
+---
+
 ## Known limitations
 
 ### Tailnet lock
@@ -953,6 +970,8 @@ esphome run example-dev.yaml --device COM3
 ```
 
 The `components/tailscale/` directory is the external component proper; `microlink/` is a vendored copy of [CamM2325/microlink](https://github.com/CamM2325/microlink) (via the [Csontikka/microlink](https://github.com/Csontikka/microlink) fork) which provides the Tailscale protocol stack. It is checked in directly rather than pulled as a submodule, so a fresh clone is ready to build with no extra steps.
+
+The vendored copy is not a mirror: it carries fixes that are not in the (dormant since March 2026) upstream, several of them ported from the microlink forks and the open upstream pull requests. Where that is the case the commit and the CHANGELOG name the source - antonmeyer (upstream PRs #28, #40), ViniciusDev26 (#35), the TimelyToga fork (send-counter lock, Noise msg2 check, relay certificate verification, the shorter relay wait) and the cplewes fork (relay TLS session resumption, relay context re-init). Each one was re-measured on an ESP32-S3 and an ESP32-C3 before it went in; what was tried and dropped is noted too.
 
 ### File layout
 
