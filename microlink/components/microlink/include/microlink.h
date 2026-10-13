@@ -79,6 +79,13 @@ typedef struct {
     bool netcheck_override_enabled;
     uint32_t netcheck_override_threshold_ms;
 
+    /* Verify the DERP relay's TLS certificate against the ESP-IDF
+     * certificate bundle (the reference client verifies too). Off is for a
+     * self-hosted relay with a private CA. The control plane is always
+     * verified; the DERP connection is authenticated by the Noise node key
+     * either way, this protects the relay's TLS layer itself. */
+    bool derp_tls_verify;
+
     /* User-selected default DERP region. The control plane does NOT compute
      * its own suggestion (Tailscale Go-style: control plane just echoes
      * whatever PreferredDERP the client sent). 0 = unset → ML_DERP_REGION

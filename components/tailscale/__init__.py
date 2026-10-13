@@ -38,6 +38,7 @@ CONF_MAX_PEERS = "max_peers"
 CONF_LOGIN_SERVER = "login_server"
 CONF_DISABLE_TELEMETRY = "disable_telemetry"
 CONF_NETCHECK_OVERRIDE = "netcheck_override"
+CONF_DERP_TLS_VERIFY = "derp_tls_verify"
 CONF_NETCHECK_OVERRIDE_THRESHOLD = "netcheck_override_threshold"
 CONF_IPN_VERSION = "ipn_version"
 CONF_NETMAP_BUFFER_KB = "netmap_buffer_kb"
@@ -59,6 +60,9 @@ CONFIG_SCHEMA = cv.Schema(
         # device is far from the default region (e.g. Frankfurt fallback on a
         # device in Australia) — see the README.
         cv.Optional(CONF_NETCHECK_OVERRIDE, default=False): cv.boolean,
+        # Verify the DERP relay's TLS certificate (ESP-IDF certificate bundle).
+        # Off only for a self-hosted relay with a private CA.
+        cv.Optional(CONF_DERP_TLS_VERIFY, default=True): cv.boolean,
         cv.Optional(
             CONF_NETCHECK_OVERRIDE_THRESHOLD, default="50ms"
         ): cv.positive_time_period_milliseconds,
@@ -94,6 +98,7 @@ async def to_code(config):
         cg.add(var.set_login_server(config[CONF_LOGIN_SERVER]))
 
     cg.add(var.set_netcheck_override(config[CONF_NETCHECK_OVERRIDE]))
+    cg.add(var.set_derp_tls_verify(config[CONF_DERP_TLS_VERIFY]))
     cg.add(
         var.set_netcheck_override_threshold(
             config[CONF_NETCHECK_OVERRIDE_THRESHOLD].total_milliseconds

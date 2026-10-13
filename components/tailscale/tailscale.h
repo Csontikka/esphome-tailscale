@@ -46,6 +46,7 @@ class TailscaleComponent : public Component {
   void set_telemetry_disabled(bool disabled) { this->telemetry_disabled_ = disabled; }
   void set_netcheck_override(bool enabled) { this->netcheck_override_ = enabled; }
   void set_netcheck_override_threshold(uint32_t ms) { this->netcheck_override_threshold_ms_ = ms; }
+  void set_derp_tls_verify(bool enabled) { this->derp_tls_verify_ = enabled; }
 #ifdef USE_SWITCH
   void set_debug_log_switch(switch_::Switch *sw) { this->debug_log_switch_ = sw; }
 #endif
@@ -164,6 +165,7 @@ class TailscaleComponent : public Component {
   bool telemetry_disabled_{false};
   bool netcheck_override_{false};
   uint32_t netcheck_override_threshold_ms_{50};
+  bool derp_tls_verify_{true};
 
   // Runtime
   microlink_t *ml_{nullptr};

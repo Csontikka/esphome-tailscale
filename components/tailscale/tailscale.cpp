@@ -245,6 +245,7 @@ void TailscaleComponent::start_microlink_() {
   // a device far from that region relays through it forever.
   config.netcheck_override_enabled = this->netcheck_override_;
   config.netcheck_override_threshold_ms = this->netcheck_override_threshold_ms_;
+  config.derp_tls_verify = this->derp_tls_verify_;
   // Hostinfo.IPNVersion: tailscale parses this as version.Long() ("x.y.z-t<hash>-g<hash>");
   // a value missing the hash suffix is silently not displayed, so accept a bare "1.98.9"
   // and append synthetic hashes. Empty => field omitted entirely (the default).
@@ -500,6 +501,7 @@ void TailscaleComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "  Netcheck Override: enabled (threshold %ums)",
                   (unsigned) this->netcheck_override_threshold_ms_);
   }
+  ESP_LOGCONFIG(TAG, "  DERP TLS Verify: %s", this->derp_tls_verify_ ? "on" : "off (private CA)");
   ESP_LOGCONFIG(TAG, "  Debug Log: switch-controlled (NVS-persisted)");
 }
 
