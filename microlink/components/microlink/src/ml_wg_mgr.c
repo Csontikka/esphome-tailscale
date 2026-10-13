@@ -26,6 +26,7 @@
 #include "lwip/ip_addr.h"
 #include "lwip/ip.h"
 #include "lwip/tcpip.h"
+#include "arch/sys_arch.h"   /* sys_thread_tcpip(): are we already on tcpip_thread? */
 #include "nacl_box.h"
 #include "wireguardif.h"
 #include "wireguard.h"
@@ -50,6 +51,11 @@ static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force);
 static void wg_netif_bring_up_cb(void *ctx)
 {
     struct netif *netif = (struct netif *)ctx;
+    /* Splice into lwIP's netif_list here too (bypassing netif_add, which
+     * wants an init callback): the list is core state like the flags below,
+     * and this used to run inline on the wg_mgr task (upstream PR #28). */
+    netif->next = netif_list;
+    netif_list = netif;
     netif_set_up(netif);
     netif_set_link_up(netif);
 }
@@ -214,6 +220,23 @@ static err_t wg_derp_output_cb(const uint8_t *peer_public_key,
  * on that thread. */
 static struct udp_pcb *s_wg_output_pcb = NULL;
 
+/* Context for running udp_sendto() on tcpip_thread when wg_udp_output_cb
+ * is not already there (upstream microlink PR #28). */
+typedef struct {
+    struct udp_pcb *pcb;
+    struct pbuf *p;
+    ip_addr_t dst;
+    u16_t port;
+    err_t result;
+    SemaphoreHandle_t done;
+} wg_udp_send_ctx_t;
+
+static void wg_udp_sendto_in_tcpip(void *arg) {
+    wg_udp_send_ctx_t *sctx = (wg_udp_send_ctx_t *)arg;
+    sctx->result = udp_sendto(sctx->pcb, sctx->p, &sctx->dst, sctx->port);
+    xSemaphoreGive(sctx->done);
+}
+
 /* Pin the magicsock WG output PCB to a specific upstream netif via
  * udp_bind_netif. Called from main code to support Phase 1.5e exit-node
  * mode where netif_default is flipped to the WG netif. */
@@ -319,7 +342,35 @@ static err_t wg_udp_output_cb(uint32_t dest_ip, uint16_t dest_port,
     IP_SET_TYPE_VAL(dst, IPADDR_TYPE_V4);
     ip4_addr_set_u32(ip_2_ip4(&dst), dest_ip);  /* already network byte order */
 
-    err_t err = udp_sendto(s_wg_output_pcb, p, &dst, dest_port);
+    /* udp_sendto() is raw lwIP core API and is only thread-safe on
+     * tcpip_thread. This callback runs there for application traffic (an
+     * app socket's send routed through the WG netif) but on the wg_mgr task
+     * for handshakes, keepalives and the periodic housekeeping. Dispatch in
+     * the latter case; calling tcpip_callback() and blocking for it while
+     * already on tcpip_thread would deadlock, hence the explicit check
+     * (upstream microlink PR #28). */
+    err_t err;
+    if (sys_thread_tcpip(LWIP_CORE_LOCK_QUERY_HOLDER)) {
+        err = udp_sendto(s_wg_output_pcb, p, &dst, dest_port);
+    } else {
+        wg_udp_send_ctx_t sctx = {
+            .pcb = s_wg_output_pcb, .p = p, .dst = dst, .port = dest_port,
+            .done = xSemaphoreCreateBinary(),
+        };
+        if (!sctx.done) {
+            pbuf_free(p);
+            return ERR_MEM;
+        }
+        err_t cb_err = tcpip_callback(wg_udp_sendto_in_tcpip, &sctx);
+        if (cb_err != ERR_OK) {
+            vSemaphoreDelete(sctx.done);
+            pbuf_free(p);
+            return cb_err;
+        }
+        xSemaphoreTake(sctx.done, portMAX_DELAY);
+        vSemaphoreDelete(sctx.done);
+        err = sctx.result;
+    }
     pbuf_free(p);
     return err;
 }
@@ -377,11 +428,8 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
      * callback uses raw udp_sendto (not BSD sendto) to avoid deadlock. */
     netif->input = tcpip_input;
 
-    /* Add to lwIP netif list (bypass netif_add which wants init callback) */
-    netif->next = netif_list;
-    netif_list = netif;
-
-    /* Bring interface up via tcpip_thread (see wg_netif_bring_up_cb above) */
+    /* Add to lwIP's netif list and bring the interface up on tcpip_thread
+     * (see wg_netif_bring_up_cb above) */
     tcpip_callback_with_block(wg_netif_bring_up_cb, netif, 1);
 
     /* Create raw UDP PCB for WG output (avoids BSD sendto deadlock on TCPIP

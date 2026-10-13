@@ -1071,6 +1071,15 @@ static int do_noise_handshake(microlink_t *ml, ml_noise_state_t *noise) {
         return -1;
     }
 
+    /* Noise IK msg2 is always a 32-byte ephemeral key + 16-byte tag. Any
+     * other length is not ours to decrypt: a longer one made
+     * ml_noise_read_msg2 decrypt into a NULL buffer (TimelyToga/microlink fork). */
+    if (payload_len != 48) {
+        ESP_LOGE(TAG, "Unexpected Noise msg2 length: %d (expected 48)", payload_len);
+        free(body_buf);
+        return -1;
+    }
+
     int msg2_total = 3 + payload_len;  /* Total msg2 frame size */
 
     /* Read remaining msg2 payload bytes from socket if needed */
@@ -1317,7 +1326,11 @@ static int do_h2_preface(microlink_t *ml, ml_noise_state_t *noise) {
      * beyond the 65535 default. SETTINGS INITIAL_WINDOW_SIZE only sets per-stream
      * window; the connection-level window starts at 65535 and must be explicitly
      * expanded with WINDOW_UPDATE on stream 0. */
-    uint32_t conn_window_delta = ML_H2_BUFFER_SIZE - 65535;
+    /* Unsigned: a buffer below 64 KB (sdkconfig_options can set one) used to
+     * underflow this to ~4 GB, which breaks the RFC 7540 window limit and
+     * the control plane answers with GOAWAY right after registration
+     * (upstream PR #35). */
+    uint32_t conn_window_delta = (ML_H2_BUFFER_SIZE > 65535) ? (ML_H2_BUFFER_SIZE - 65535) : 0;
     if (conn_window_delta > 0) {
         int wu_len = ml_h2_build_window_update(h2_init + pos, sizeof(h2_init) - pos,
                                                 0, conn_window_delta);
@@ -2785,10 +2798,14 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
             last_progress_ms = now;
         }
 
-        /* Proactive WINDOW_UPDATE every 32KB to keep server sending.
-         * Must update BOTH connection-level (stream 0) AND stream-level (stream 3)
-         * windows, otherwise the server stalls when either window exhausts. */
-        if (window_consumed >= 32768) {
+        /* Proactive WINDOW_UPDATE at half our declared stream window to keep
+         * the server sending. Must update BOTH connection-level (stream 0) AND
+         * stream-level (stream 3) windows, otherwise the server stalls when
+         * either window exhausts. Scaled to ML_H2_BUFFER_SIZE (our declared
+         * INITIAL_WINDOW_SIZE) rather than a fixed 32 KB: with a buffer below
+         * 64 KB the server exhausts our window before a fixed threshold ever
+         * fires and the response stalls (upstream PR #35). */
+        if (window_consumed >= ML_H2_BUFFER_SIZE / 2) {
             uint8_t wu_buf[26];  /* 2 WINDOW_UPDATE frames: 13 bytes each */
             int wu_len = ml_h2_build_window_update(wu_buf, 13, 0, (uint32_t)window_consumed);
             wu_len += ml_h2_build_window_update(wu_buf + wu_len, 13, 3, (uint32_t)window_consumed);
@@ -2841,6 +2858,14 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
             if (json_total + f_len < ML_JSON_BUFFER_SIZE) {
                 memmove(h2_recv + json_total, h2_recv + fpos, f_len);
                 json_total += f_len;
+            } else {
+                /* Skipping this frame and carrying on would stitch the next
+                 * frame that happens to fit onto the gap: plausible-looking
+                 * but corrupted JSON instead of a clean, visible cutoff
+                 * (upstream PR #35). */
+                ESP_LOGW(TAG, "  JSON buffer full at %d KB, truncating the MapResponse",
+                         (int)(json_total / 1024));
+                break;
             }
         }
 
@@ -3671,6 +3696,35 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
             /* HTTP/2 SETTINGS from server — respond with SETTINGS ACK */
             uint8_t settings_ack[9] = {0x00, 0x00, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00};
             noise_send(ml, noise, settings_ack, sizeof(settings_ack));
+        } else if (f_type == 0x03 || f_type == 0x07) {
+            /* RST_STREAM (0x03) on the long-poll stream, or a connection-level
+             * GOAWAY (0x07): the server has closed the map session. Node.Online
+             * on the admin console tracks exactly this stream, so from here on
+             * the node is shown offline while PINGs and endpoint updates on the
+             * other streams keep the transport looking alive. Both frames used
+             * to fall through unrecognised; reconnect now instead of waiting for
+             * the stream-liveness watchdog (upstream microlink PR #40). */
+            uint32_t err_code = f_len >= 4
+                ? ((uint32_t)frame_buf[pos] << 24 | (uint32_t)frame_buf[pos + 1] << 16 |
+                   (uint32_t)frame_buf[pos + 2] << 8 | frame_buf[pos + 3])
+                : 0;
+            if (f_type == 0x07) {
+                ESP_LOGW(TAG, "H2 GOAWAY from the control plane (error %lu) - reconnecting",
+                         (unsigned long)err_code);
+                ml->h2_acc_len = 0;
+                ml->lp_acc_len = 0;
+                proto_err = true;
+                break;
+            }
+            ESP_LOGW(TAG, "H2 RST_STREAM on stream %lu (error %lu)%s",
+                     (unsigned long)f_stream, (unsigned long)err_code,
+                     f_stream == 5 ? " - the map session is gone, reconnecting" : "");
+            if (f_stream == 5) {
+                ml->h2_acc_len = 0;
+                ml->lp_acc_len = 0;
+                proto_err = true;
+                break;
+            }
         }
         pos += f_len;
     }

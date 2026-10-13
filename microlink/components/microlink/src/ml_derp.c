@@ -879,7 +879,19 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
     int64_t t_derp_tcp = esp_timer_get_time();
     ESP_LOGI(TAG, "[TIMING] DERP TCP connect: %lld ms", (t_derp_tcp - t_derp_dns) / 1000);
 
-    /* TLS setup */
+    /* TLS setup. Free any prior state first: mbedtls_*_init() only zeroes
+     * the structs, so buffers left behind by a connect that got past
+     * mbedtls_ssl_setup() before failing, or by a session torn down without
+     * ml_derp_disconnect(), would be orphaned and the dynamic-buffer code
+     * has been seen dereferencing the half-initialised context on the next
+     * handshake (LoadProhibited after repeated DNS failures behind a captive
+     * portal - cplewes/microlink fork). The free functions are safe on
+     * zeroed or already-freed structs. */
+    mbedtls_ssl_free(&ml->derp.ssl);
+    mbedtls_ssl_config_free(&ml->derp.ssl_conf);
+    mbedtls_ctr_drbg_free(&ml->derp.ctr_drbg);
+    mbedtls_entropy_free(&ml->derp.entropy);
+
     mbedtls_ssl_init(&ml->derp.ssl);
     mbedtls_ssl_config_init(&ml->derp.ssl_conf);
     mbedtls_entropy_init(&ml->derp.entropy);
