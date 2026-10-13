@@ -52,6 +52,7 @@ void TailscaleComponent::apply_debug_log(bool enabled) {
   esp_log_level_set("ml_peer_nvs", level);
   esp_log_level_set("ml_wg_mgr", level);
   esp_log_level_set("ml_stun", level);
+  esp_log_level_set("ml_netcheck", level);
   esp_log_level_set("microlink", level);
   ESP_LOGI(TAG, "Microlink debug log: %s", enabled ? "ON" : "OFF");
 }
