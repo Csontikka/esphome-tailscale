@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.23] — 2026-10-13
+
 ### Changed
 - **An unchanged DERP map no longer repeats the relay latency check.** The control plane re-sends the DERP map on the map stream (the first update after the initial map on Tailscale, every map on Headscale), and each arrival ran the full STUN sweep on the control task, holding the map stream for 5–7 s about ten seconds after every connect. A map whose regions, node hostnames and STUN ports are unchanged within the last 30 minutes now reuses the previous measurement; a changed map still gets a fresh sweep.
 - **Headscale connects about 25 s faster.** With a single relay region (Headscale's embedded DERP) there is nothing for the latency check to choose between, and the relay's STUN port is often not reachable at all, so the check ran its whole 25 s budget on every connect for a result that was never used: `MapResponse recv+parse: 26128 ms` on an ESP32-S3 against Headscale even after 0.5.21. A single-region map skips the check; and when nothing answers on a multi-region map the check now gives up after one retry (10 s) instead of 25 s.
