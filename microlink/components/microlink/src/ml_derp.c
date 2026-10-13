@@ -778,6 +778,14 @@ void ml_derp_rx_task(void *arg) {
  * DERP Connection Management (called from coord task)
  * ========================================================================== */
 
+/* Drop the saved TLS session (see ml_derp_conn_t). Safe to call when none. */
+void ml_derp_free_saved_session(microlink_t *ml) {
+    if (ml->derp.have_saved_session) {
+        mbedtls_ssl_session_free(&ml->derp.saved_session);
+        ml->derp.have_saved_session = false;
+    }
+}
+
 esp_err_t ml_derp_connect(microlink_t *ml) {
     /* Determine DERP host/port from DERPMap with node failover.
      * Always start from node 0 (the first/preferred node in the DERPMap).
@@ -923,6 +931,21 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
     mbedtls_ssl_set_bio(&ml->derp.ssl, &ml->derp.sockfd,
                          ml_derp_bio_send, NULL, ml_derp_bio_recv_timeout);
 
+    /* Resume the TLS session saved by the previous successful connect, if
+     * any: a resumed handshake skips the key exchange and the certificate
+     * chain, which is most of the time a DERP reconnect spends (cplewes/
+     * microlink fork). Best effort: on any failure it is a full handshake. */
+    bool resume_tried = false;
+    if (ml->derp.have_saved_session) {
+        int sret = mbedtls_ssl_set_session(&ml->derp.ssl, &ml->derp.saved_session);
+        if (sret == 0) {
+            resume_tried = true;
+            ESP_LOGI(TAG, "DERP TLS: resuming the saved session");
+        } else {
+            ESP_LOGW(TAG, "DERP TLS: set_session -0x%04x, full handshake", -sret);
+        }
+    }
+
     /* TLS handshake - socket has 10s SO_RCVTIMEO from connect phase. */
     int ret;
     while ((ret = mbedtls_ssl_handshake(&ml->derp.ssl)) != 0) {
@@ -936,8 +959,20 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
     }
 
     int64_t t_derp_tls = esp_timer_get_time();
-    ESP_LOGI(TAG, "[TIMING] DERP TLS handshake: %lld ms", (t_derp_tls - t_derp_tcp) / 1000);
+    ESP_LOGI(TAG, "[TIMING] DERP TLS handshake: %lld ms%s", (t_derp_tls - t_derp_tcp) / 1000,
+             resume_tried ? " (session resumption offered)" : "");
     ESP_LOGI(TAG, "TLS connected to DERP");
+
+    /* Save the negotiated session for the next connect. get_session deep-
+     * copies the ticket, so drop the previous copy first. Done right after
+     * the handshake: with TLS 1.2 the ticket is part of the handshake. */
+    ml_derp_free_saved_session(ml);
+    mbedtls_ssl_session_init(&ml->derp.saved_session);
+    if (mbedtls_ssl_get_session(&ml->derp.ssl, &ml->derp.saved_session) == 0) {
+        ml->derp.have_saved_session = true;
+    } else {
+        mbedtls_ssl_session_free(&ml->derp.saved_session);
+    }
 
     /* HTTP Upgrade: GET /derp with Upgrade: DERP header */
     char upgrade_req[256];
