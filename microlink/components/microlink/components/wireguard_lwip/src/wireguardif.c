@@ -48,6 +48,13 @@
 #include "lwip_compat.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+// Serialises the send counter + encryption in wireguardif_output_to_peer()
+// (see there). Static so that it exists before the first netif is created.
+static SemaphoreHandle_t wg_tx_lock;
+static StaticSemaphore_t wg_tx_lock_buf;
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -95,6 +102,34 @@ static bool g_disable_socket_bind = false;
 
 void wireguardif_disable_socket_bind(void) {
 	g_disable_socket_bind = true;
+}
+
+// netif_set_link_up()/netif_set_link_down() are core lwIP netif state and must
+// only run on tcpip_thread (CONFIG_LWIP_CHECK_THREAD_SAFETY asserts otherwise).
+// The handshake and timer paths below run on the task that feeds
+// wireguardif_network_rx() / wireguardif_periodic() - the WireGuard manager
+// task, or tcpip_thread itself on the zero-copy receive path - so dispatch
+// through tcpip_callback() (fire-and-forget: nothing here waits for the flag).
+// The flag is checked first so the per-packet call site costs one read once
+// the link is up; a stale read only costs one redundant, still correct,
+// dispatch. (Upstream microlink PR #28.)
+static void netif_set_link_up_in_tcpip(void *arg) {
+	netif_set_link_up((struct netif *)arg);
+}
+static void wireguardif_mark_link_up(struct netif *netif) {
+	if (netif->flags & NETIF_FLAG_LINK_UP) {
+		return;
+	}
+	tcpip_callback(netif_set_link_up_in_tcpip, netif);
+}
+static void netif_set_link_down_in_tcpip(void *arg) {
+	netif_set_link_down((struct netif *)arg);
+}
+static void wireguardif_mark_link_down(struct netif *netif) {
+	if (!(netif->flags & NETIF_FLAG_LINK_UP)) {
+		return;
+	}
+	tcpip_callback(netif_set_link_down_in_tcpip, netif);
 }
 
 bool wireguardif_is_wireguard_packet(const uint8_t *data, size_t len) {
@@ -371,6 +406,12 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 				hdr->type = MESSAGE_TRANSPORT_DATA;
 				hdr->receiver = keypair->remote_index;
 				// Alignment required... pbuf_alloc has probably aligned data, but want to be sure
+				// Several tasks send through here (tcpip_thread for application
+				// traffic, the WireGuard manager task for keepalives): without a
+				// lock two packets can take the same counter, which is nonce
+				// reuse under ChaCha20-Poly1305. Held until the packet is
+				// encrypted and the counter advanced. (TimelyToga/microlink fork.)
+				xSemaphoreTake(wg_tx_lock, portMAX_DELAY);
 				U64TO8_LITTLE(hdr->counter, keypair->sending_counter);
 
 				// Copy the encrypted (padded) data to the output packet - chacha20poly1305_encrypt() can encrypt data in-place which avoids call to mem_malloc
@@ -386,6 +427,7 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 
 				// Then encrypt
 				wireguard_encrypt_packet(dst, dst, padded_len, keypair);
+				xSemaphoreGive(wg_tx_lock);
 
 				WG_DEBUG("[WG_TX] Sending encrypted DATA packet: %u bytes, remote_idx=%lu\n",
 				       (unsigned)pbuf->tot_len, (unsigned long)hdr->receiver);
@@ -518,7 +560,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		wireguardif_send_keepalive(device, peer);
 
 		// Set the IF-UP flag on netif
-		netif_set_link_up(device->netif);
+		wireguardif_mark_link_up(device->netif);
 		ESP_LOGW(TAG, "[WG] *** WIREGUARD SESSION ESTABLISHED wg_idx=%u ***", wg_idx);
 	} else {
 		// Packet bad
@@ -609,7 +651,7 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					}
 
 					// Make sure that link is reported as up
-					netif_set_link_up(device->netif);
+					wireguardif_mark_link_up(device->netif);
 
 					if (pbuf->tot_len > 0) {
 						//4a. Once the packet payload is decrypted, the interface has a plaintext packet. If this is not an IP packet, it is dropped.
@@ -1361,7 +1403,7 @@ static void wireguardif_tmr(void *arg) {
 
 	if (!link_up) {
 		// Clear the IF-UP flag on netif
-		netif_set_link_down(device->netif);
+		wireguardif_mark_link_down(device->netif);
 	}
 }
 
@@ -1432,7 +1474,7 @@ void wireguardif_periodic(struct netif *netif) {
 		}
 	}
 	if (!link_up) {
-		netif_set_link_down(device->netif);
+		wireguardif_mark_link_down(device->netif);
 	}
 }
 
@@ -1443,6 +1485,10 @@ err_t wireguardif_init(struct netif *netif) {
 	struct udp_pcb *udp;
 	uint8_t private_key[WIREGUARD_PRIVATE_KEY_LEN];
 	size_t private_key_len = sizeof(private_key);
+
+	if (!wg_tx_lock) {
+		wg_tx_lock = xSemaphoreCreateMutexStatic(&wg_tx_lock_buf);
+	}
 
 	LWIP_ASSERT("netif != NULL", (netif != NULL));
 	LWIP_ASSERT("state != NULL", (netif->state != NULL));
