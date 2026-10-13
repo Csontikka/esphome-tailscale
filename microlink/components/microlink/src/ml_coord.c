@@ -2330,7 +2330,43 @@ static bool derp_map_finish(microlink_t *ml) {
      *       with near-identical latency, e.g. Frankfurt 100 ms vs
      *       Sao Paulo 86 ms with a 50 ms threshold = stay on FFM). */
     if (ml->derp_region_count > 0) {
-        uint16_t measured = ml_netcheck_pick_best_derp(ml);
+        /* The control plane re-sends the DERPMap on the stream (the first
+         * update after the initial map on Tailscale SaaS, every map on
+         * Headscale). The netcheck runs on this task and holds the stream
+         * for its whole sweep, so an unchanged map within half an hour
+         * reuses the last measurement - a changed one (regions added or
+         * removed, node hostnames) still gets a fresh sweep. */
+        uint32_t fp = 2166136261u;
+        for (int r = 0; r < ml->derp_region_count; r++) {
+            const ml_derp_region_t *reg = &ml->derp_regions[r];
+            fp = (fp ^ reg->region_id) * 16777619u;
+            for (int j = 0; j < reg->node_count; j++) {
+                for (const char *c = reg->nodes[j].hostname; *c; c++) fp = (fp ^ (uint8_t)*c) * 16777619u;
+                fp = (fp ^ reg->nodes[j].stun_port) * 16777619u;
+            }
+        }
+        uint64_t now_ms = ml_get_time_ms();
+        uint16_t measured;
+        if (ml->derp_region_count == 1) {
+            /* One region (a self-hosted control plane with its embedded
+             * relay): there is nothing to choose between, and its STUN port
+             * is often not reachable at all - the sweep then ran its whole
+             * budget on every connect for a result that was never used. */
+            measured = ml->derp_regions[0].region_id;
+            ESP_LOGI(TAG, "DERPMap has a single region (%u) - no latency check needed", measured);
+        } else if (ml->netcheck_done_ms != 0 && fp == ml->netcheck_map_fp &&
+                   now_ms - ml->netcheck_done_ms < 30 * 60 * 1000ULL) {
+            measured = ml->netcheck_best;
+            ESP_LOGI(TAG, "DERPMap unchanged (%d regions) - keeping the netcheck from %lu s ago (best region %u)",
+                     ml->derp_region_count, (unsigned long)((now_ms - ml->netcheck_done_ms) / 1000), measured);
+        } else {
+            measured = ml_netcheck_pick_best_derp(ml);
+            if (measured != 0) {   /* 0 = nothing answered or stop requested: measure again next time */
+                ml->netcheck_map_fp = fp;
+                ml->netcheck_done_ms = ml_get_time_ms();
+                ml->netcheck_best = measured;
+            }
+        }
         uint16_t cp = ml->derp_region_default;
 
         if (!ml->config.netcheck_override_enabled) {

@@ -26,9 +26,14 @@
 
 static const char *TAG = "ml_netcheck";
 
-#define NETCHECK_TIMEOUT_MS    25000 /* Total budget — covers a 19-second STUN retry seen in ml_stun */
-#define NETCHECK_RETRY_GAP_MS  5000  /* Re-send to non-responded regions every 5 s, mimics tailscale Go */
-#define NETCHECK_MAX_RETRIES   3     /* Initial send + up to 3 retries = 4 attempts/region */
+#define NETCHECK_TIMEOUT_MS    10000 /* Total budget when nothing answers: the first send plus one
+                                      * retry sweep. This runs on the coord task before the map
+                                      * stream, so a relay whose STUN port is unreachable (a
+                                      * self-hosted one behind a proxy, say) used to cost 25 s on
+                                      * every connect; the reference client's whole report is
+                                      * capped at about 5 s. */
+#define NETCHECK_RETRY_GAP_MS  5000  /* Re-send to non-responded regions after 5 s, mimics tailscale Go */
+#define NETCHECK_MAX_RETRIES   1     /* Initial send + 1 retry = 2 attempts/region */
 #define NETCHECK_PROBE_GAP_MS  50    /* Spread sendto() to avoid local NAT/UDP burst loss */
 #define NETCHECK_MAX_PROBES    ML_MAX_DERP_REGIONS
 
