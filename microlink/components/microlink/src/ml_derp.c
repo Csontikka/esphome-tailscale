@@ -27,6 +27,8 @@
 #include "lwip/netdb.h"
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/error.h"
+#include "mbedtls/x509_crt.h"
+#include "esp_crt_bundle.h"
 #include "nacl_box.h"
 #include <string.h>
 #include <errno.h>
@@ -912,7 +914,15 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
                                  MBEDTLS_SSL_IS_CLIENT,
                                  MBEDTLS_SSL_TRANSPORT_STREAM,
                                  MBEDTLS_SSL_PRESET_DEFAULT);
-    mbedtls_ssl_conf_authmode(&ml->derp.ssl_conf, MBEDTLS_SSL_VERIFY_NONE);
+    /* The relay's certificate is checked against the ESP-IDF bundle unless
+     * the application turned it off (self-hosted relay with a private CA).
+     * The hostname for the check is set below (SNI). */
+    if (ml->config.derp_tls_verify) {
+        mbedtls_ssl_conf_authmode(&ml->derp.ssl_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+        esp_crt_bundle_attach(&ml->derp.ssl_conf);
+    } else {
+        mbedtls_ssl_conf_authmode(&ml->derp.ssl_conf, MBEDTLS_SSL_VERIFY_NONE);
+    }
     mbedtls_ssl_conf_rng(&ml->derp.ssl_conf, mbedtls_ctr_drbg_random, &ml->derp.ctr_drbg);
     mbedtls_ssl_conf_read_timeout(&ml->derp.ssl_conf, DERP_CONNECT_TIMEOUT_MS);
 
@@ -955,6 +965,14 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
         char err_buf[128];
         mbedtls_strerror(ret, err_buf, sizeof(err_buf));
         ESP_LOGE(TAG, "TLS handshake failed: %s", err_buf);
+        if (ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+            uint32_t flags = mbedtls_ssl_get_verify_result(&ml->derp.ssl);
+            char vbuf[256];
+            if (mbedtls_x509_crt_verify_info(vbuf, sizeof(vbuf), "", flags) > 0) {
+                ESP_LOGE(TAG, "DERP %s certificate not trusted: %s", derp_host, vbuf);
+            }
+            ESP_LOGE(TAG, "A self-hosted relay with a private CA needs derp_tls_verify: false");
+        }
         goto fail_tls;
     }
 
