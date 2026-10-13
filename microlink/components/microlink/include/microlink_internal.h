@@ -462,6 +462,12 @@ typedef struct {
     bool connected;
     volatile bool rx_parked;        /* reader sets true when NOT touching the ssl context */
     uint64_t last_recv_ms;          /* For keepalive watchdog */
+    /* TLS session saved from the last successful connect so that the next
+     * one can be resumed (session ticket) instead of a full handshake.
+     * Survives the per-connect free/init of the contexts above; freed in
+     * ml_derp_free_saved_session(). */
+    mbedtls_ssl_session saved_session;
+    bool have_saved_session;
 } ml_derp_conn_t;
 
 /* ============================================================================
@@ -737,6 +743,9 @@ void ml_task_exiting(microlink_t *ml);
 /* Generate a new WireGuard (node) keypair and persist it; the control plane
  * said the old one expired. */
 void ml_rotate_node_key(microlink_t *ml);
+
+/* ml_derp.c: drop the TLS session saved for resumption (destroy path). */
+void ml_derp_free_saved_session(microlink_t *ml);
 esp_err_t ml_derp_queue_send(microlink_t *ml, const uint8_t *dest_key,
                               const uint8_t *data, size_t len);
 

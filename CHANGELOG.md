@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Changed
+- **A DERP reconnect resumes the previous TLS session.** The session (ticket) negotiated by a successful DERP connect is kept and offered on the next one, so the relay reconnect after a rebind, a network change or a dropped relay skips the key exchange and the certificate chain. Measured on an ESP32-S3 against Tailscale's relay: the TLS handshake went from 620–690 ms to 40–60 ms and the whole relay reconnect from about 0.8 s to 0.3 s; on an ESP32-C3 (no PSRAM, single core) from 800–1540 ms to 36–69 ms. A full handshake is done whenever the relay declines the ticket. From the cplewes/microlink fork.
+
 ## [0.5.19] — 2026-10-13
 
 ### Fixed

@@ -622,6 +622,7 @@ void microlink_destroy(microlink_t *ml) {
      * ML_JSON_BUFFER_SIZE) were never released here before: every
      * stop/start cycle lost ~650 KB on the reference router. */
     ml_derp_disconnect(ml);
+    ml_derp_free_saved_session(ml);
     if (ml->h2_acc) { free(ml->h2_acc); ml->h2_acc = NULL; ml->h2_acc_len = 0; }
     if (ml->lp_acc) { free(ml->lp_acc); ml->lp_acc = NULL; ml->lp_acc_len = 0; }
 
