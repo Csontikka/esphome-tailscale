@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.22] — 2026-10-13
+
 ### Security
 - **The relay's TLS certificate is verified.** The DERP connection was made with certificate verification off; the reference client verifies, and the ESP-IDF certificate bundle that already verifies the control plane covers Tailscale's and any Let's Encrypt-backed Headscale relay. New option `derp_tls_verify` (default `true`); set it to `false` for a self-hosted relay with a private CA - a failed check says so in the log. The relay connection is authenticated by the node key either way; this closes the TLS layer itself. Idea from the TimelyToga/microlink fork.
 
