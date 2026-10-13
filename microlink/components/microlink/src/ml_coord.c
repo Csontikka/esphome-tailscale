@@ -4036,10 +4036,17 @@ void ml_coord_task(void *arg) {
                      * as "1 task(s) still running 15000 ms after the stop
                      * request" (measured: the coord task signed off 100 ms
                      * after the deadline). */
-                    ESP_LOGI(TAG, "Waiting for DERP I/O task to connect...");
+                    /* Give the relay a moment, not 15 s: the long-poll and
+                     * "connected" do not depend on it (the I/O task keeps
+                     * connecting in the background, and the home region
+                     * reported to the control plane is decided before the
+                     * connect). Peers that need the relay reach us a second
+                     * later; a relay that is down no longer holds the whole
+                     * connect for 15 s (TimelyToga/microlink fork). */
+                    ESP_LOGI(TAG, "Waiting briefly for the DERP I/O task to connect...");
                     EventBits_t derp_wb = xEventGroupWaitBits(ml->events,
                                         ML_EVT_DERP_CONNECTED | ML_EVT_SHUTDOWN_REQUEST,
-                                        pdFALSE, pdFALSE, pdMS_TO_TICKS(15000));
+                                        pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
                     if (derp_wb & ML_EVT_SHUTDOWN_REQUEST) {
                         ESP_LOGI(TAG, "Stop requested while waiting for DERP - not continuing the connect");
                         break;   /* leaves the state switch; the task loop sees the bit and exits */

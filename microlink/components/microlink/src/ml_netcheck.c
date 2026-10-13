@@ -176,12 +176,27 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     ESP_LOGI(TAG, "sent %d STUN probes, retrying every %d ms up to %d ms total",
              probe_count, NETCHECK_RETRY_GAP_MS, NETCHECK_TIMEOUT_MS);
 
-    uint64_t deadline = esp_timer_get_time() + (uint64_t)NETCHECK_TIMEOUT_MS * 1000ULL;
-    uint64_t next_retry_at = esp_timer_get_time() + (uint64_t)NETCHECK_RETRY_GAP_MS * 1000ULL;
+    uint64_t started = esp_timer_get_time();
+    uint64_t deadline = started + (uint64_t)NETCHECK_TIMEOUT_MS * 1000ULL;
+    uint64_t next_retry_at = started + (uint64_t)NETCHECK_RETRY_GAP_MS * 1000ULL;
     int retries_done = 0;
+    int responded = 0;
 
     while (esp_timer_get_time() < deadline && !netcheck_stop_requested(ml)) {
         uint64_t now = esp_timer_get_time();
+
+        /* Done early: every region answered, or the first retry is due
+         * (NETCHECK_RETRY_GAP_MS) and we already have answers - a region
+         * still silent after that long is blocked or far away and will not
+         * become the best pick, so the retries are only worth it when
+         * nothing answered at all. This loop used to run the whole
+         * NETCHECK_TIMEOUT_MS budget regardless, and it runs on the coord
+         * task before the DERP connect and the long-poll: 27 s of every
+         * connect on both boards. The reference client caps its full
+         * report at about 5 s as well. */
+        if (responded == probe_count || (responded > 0 && now >= next_retry_at)) {
+            break;
+        }
 
         /* Retry sweep: re-send to any region we haven't heard from yet.
          * Regenerates the txid so the new attempt is the one we match
@@ -239,6 +254,7 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
             if (memcmp(buf + 8, probes[i].txid, 12) != 0) continue;
             probes[i].rtt_us = (uint32_t)(recv_us - probes[i].send_us);
             probes[i].got_response = true;
+            responded++;
             ESP_LOGI(TAG, "region %d RTT=%lu ms", probes[i].region_id,
                      (unsigned long)(probes[i].rtt_us / 1000));
 
@@ -301,8 +317,9 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     if (best_region == 0) {
         ESP_LOGW(TAG, "no DERP region responded — falling back to default");
     } else {
-        ESP_LOGI(TAG, "best DERP = region %d (%lu ms)",
-                 best_region, (unsigned long)(best_rtt / 1000));
+        ESP_LOGI(TAG, "best DERP = region %d (%lu ms); %d/%d regions answered in %lu ms",
+                 best_region, (unsigned long)(best_rtt / 1000), responded, probe_count,
+                 (unsigned long)((esp_timer_get_time() - started) / 1000));
     }
     return best_region;
 }
