@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.21] — 2026-10-13
+
 ### Changed
 - **Connecting is about 20 s faster.** The relay latency check (STUN probes to every DERP region) ran for its whole 25 s budget on every connect even when the regions had long answered, and it runs on the control task before the relay connect and the map stream: 27 s of every connect, on an ESP32-S3 and a C3 alike. It now stops as soon as every region has answered, or at the first retry (5 s) when at least one has; the full budget remains for the case where nothing answers. The control task also no longer waits up to 15 s for the relay before starting the map stream and reporting "connected": it waits half a second and the relay keeps connecting in the background, so a relay that is down does not hold the whole connect either (the latter from the TimelyToga/microlink fork). Measured: see the pull request.
 - **The relay latency check logs with the debug switch.** Its lines (probes sent, per-region RTT, best region, how long it took) were never shown because the `ml_netcheck` tag was missing from the list the `VPN Debug Log` switch controls.
