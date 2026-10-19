@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Changed
+- **WireGuard packets go only to an address DISCO has confirmed.** A new peer's WireGuard endpoint was seeded from the first endpoint in the netmap, an address nobody had verified: often the peer's LAN or container address, or a port its NAT no longer mapped, so the first handshake went into the void and the connection waited for the retry. The endpoint now stays blank until a DISCO pong confirms a direct path, and WireGuard traffic goes over the relay until then, which is what the official client does. The netmap endpoints are still probed. Ported from the Csontikka/microlink fork (6fe1cc8).
+
 ## [0.5.24] — 2026-10-19
 
 ### Fixed

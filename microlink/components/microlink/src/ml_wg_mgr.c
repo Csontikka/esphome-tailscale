@@ -588,18 +588,19 @@ static void wg_register_peer(microlink_t *ml, ml_peer_t *p) {
         IP4_ADDR(&wg_peer.allowed_ip.u_addr.ip4, ip_a, ip_b, ip_c, ip_d);
         IP4_ADDR(&wg_peer.allowed_mask.u_addr.ip4, 255, 255, 255, 255);
 
-        /* Set endpoint if available, otherwise leave blank for DERP-only */
-        if (p->endpoint_count > 0 && p->endpoints[0].ip != 0) {
-            uint8_t ea = (p->endpoints[0].ip >> 24) & 0xFF;
-            uint8_t eb = (p->endpoints[0].ip >> 16) & 0xFF;
-            uint8_t ec = (p->endpoints[0].ip >> 8) & 0xFF;
-            uint8_t ed = p->endpoints[0].ip & 0xFF;
-            IP4_ADDR(&wg_peer.endpoint_ip.u_addr.ip4, ea, eb, ec, ed);
-            wg_peer.endport_port = p->endpoints[0].port;
-        } else {
-            ip_addr_set_any(false, &wg_peer.endpoint_ip);
-            wg_peer.endport_port = 0;
-        }
+        /* No WireGuard endpoint until DISCO has confirmed one. The netmap's
+         * first endpoint used to be copied here, so WireGuard packets went
+         * to an address nobody had verified: a peer's LAN or container
+         * address, or a port the peer's NAT no longer maps. The official
+         * client sends WireGuard only to the DISCO-confirmed best address,
+         * and over the relay until there is one; a blank endpoint here means
+         * exactly that (wireguardif routes to DERP while peer->ip is unset).
+         * A direct PONG sets the endpoint through wireguardif_update_endpoint(),
+         * which also becomes the address a stale-session reset falls back
+         * to. The netmap endpoints are still used, as DISCO probe targets.
+         * Ported from the Csontikka/microlink fork (6fe1cc8). */
+        ip_addr_set_any(false, &wg_peer.endpoint_ip);
+        wg_peer.endport_port = 0;
 
         wg_peer.keep_alive = 25;
 
