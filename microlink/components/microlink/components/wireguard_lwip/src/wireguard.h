@@ -112,6 +112,7 @@ struct wireguard_keypair {
 };
 
 struct wireguard_handshake {
+	uint32_t created_millis;   /* wireguard_sys_now() when the handshake state was created; expires after REJECT_AFTER_TIME*3 */
 	bool valid;
 	bool initiator;
 	uint32_t local_index;
@@ -286,10 +287,19 @@ struct wireguard_peer *peer_lookup_by_peer_index(struct wireguard_device *device
 struct wireguard_peer *peer_lookup_by_receiver(struct wireguard_device *device, uint32_t receiver);
 struct wireguard_peer *peer_lookup_by_handshake(struct wireguard_device *device, uint32_t receiver);
 
-void wireguard_start_session(struct wireguard_peer *peer, bool initiator);
+/* false when the handshake state is gone (expired or never completed); nothing is changed then. */
+bool wireguard_start_session(struct wireguard_peer *peer, bool initiator);
 
-void keypair_update(struct wireguard_peer *peer, struct wireguard_keypair *received_keypair);
+/* Returns the keypair the caller should keep using: the promoted current one when the
+ * received key was 'next', otherwise the received one. */
+struct wireguard_keypair *keypair_update(struct wireguard_peer *peer, struct wireguard_keypair *received_keypair);
 void keypair_destroy(struct wireguard_keypair *keypair);
+bool wireguard_keypair_expired(const struct wireguard_keypair *keypair);
+/* Expire the handshake and each of the three transport keypairs independently (WireGuard 6.2: a key
+ * is unusable after REJECT_AFTER_TIME or REJECT_AFTER_MESSAGES; unfinished handshake state after 3x). */
+void wireguard_expire_keys(struct wireguard_peer *peer);
+void wireguard_destroy_handshake(struct wireguard_peer *peer);
+void wireguard_expire_handshake(struct wireguard_peer *peer);
 
 struct wireguard_keypair *get_peer_keypair_for_idx(struct wireguard_peer *peer, uint32_t idx);
 bool wireguard_check_replay(struct wireguard_keypair *keypair, uint64_t seq);
@@ -311,6 +321,8 @@ bool wireguard_check_mac2(struct wireguard_device *device, const uint8_t *data, 
 bool wireguard_expired(uint32_t created_millis, uint32_t valid_seconds);
 
 void wireguard_encrypt_packet(uint8_t *dst, const uint8_t *src, size_t src_len, struct wireguard_keypair *keypair);
+/* Authenticates, then runs the anti-replay window; false for a forged, replayed, too-short or
+ * counter-exhausted packet. Keepalives (empty payload) go through the same checks. */
 bool wireguard_decrypt_packet(uint8_t *dst, const uint8_t *src, size_t src_len, uint64_t counter, struct wireguard_keypair *keypair);
 
 bool wireguard_base64_decode(const char *str, uint8_t *out, size_t *outlen);

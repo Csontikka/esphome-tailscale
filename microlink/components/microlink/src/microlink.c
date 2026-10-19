@@ -249,19 +249,27 @@ microlink_t *microlink_init(const microlink_config_t *config) {
         uint64_t base_seconds = 0;
         time_t wallclock = 0;
         time(&wallclock);
-        if (wallclock > 1700000000) {
-            base_seconds = (uint64_t)wallclock;
-        } else {
-            nvs_handle_t h;
-            if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
-                uint64_t prev = 0;
-                size_t sz = sizeof(prev);
-                nvs_get_blob(h, "wg_tai_base", &prev, &sz);
+        nvs_handle_t h;
+        if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+            uint64_t prev = 0;
+            size_t sz = sizeof(prev);
+            nvs_get_blob(h, "wg_tai_base", &prev, &sz);
+            if (wallclock > 1700000000) {
+                /* Synced: real time, but never below what an earlier boot may have emitted. */
+                base_seconds = (uint64_t)wallclock > prev ? (uint64_t)wallclock : prev + 1;
+            } else {
                 base_seconds = prev + 86400ULL; /* +1 day per boot */
+            }
+            /* Persist on synced boots too. An unsynced boot after a synced one used to start from
+             * a counter far below the real-time stamps the peers had already seen, and every
+             * handshake we initiated was dropped as a replay until SNTP caught up. */
+            if (base_seconds > prev) {
                 nvs_set_blob(h, "wg_tai_base", &base_seconds, sizeof(base_seconds));
                 nvs_commit(h);
-                nvs_close(h);
             }
+            nvs_close(h);
+        } else if (wallclock > 1700000000) {
+            base_seconds = (uint64_t)wallclock;
         }
         wireguard_set_tai64n_base_seconds(base_seconds);
         ESP_LOGI(TAG, "TAI64N base seconds set to %llu (wallclock=%lld)",

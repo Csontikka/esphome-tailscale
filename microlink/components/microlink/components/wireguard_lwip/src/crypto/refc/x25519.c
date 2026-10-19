@@ -233,7 +233,10 @@ static void x25519_core(fe xs[5], const uint8_t scalar[X25519_BYTES], const uint
 #if X25519_MEMCPY_PARAMS
     fe x1i;
     swapin(x1i,x1);
-    x1 = (const uint8_t *)x1;
+    /* RFC 7748: X25519 ignores bit 255 of the input coordinate. The copy used to be made
+     * and then ignored (x1 = x1), so the ladder read the caller's unmasked buffer. */
+    if (clamp) x1i[NLIMBS - 1] &= ((limb_t)-1) >> 1;
+    x1 = (const uint8_t *)x1i;
 #endif
     limb_t swap = 0;
     limb_t *x2 = xs[0],*x3=xs[2],*z3=xs[3];
