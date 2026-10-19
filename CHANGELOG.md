@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.26] — 2026-10-19
+
 ### Fixed
 - **WireGuard session handling follows the protocol's key and handshake lifetimes.** A set of fixes to the vendored WireGuard implementation, ported from the Csontikka/microlink fork (9e07d8f): the anti-replay window compared counters in 32 bits, so a counter jump beyond 2^32 let an old packet back in; replay is now checked after authentication and before any peer state changes, keepalives included; a packet whose counter has passed the per-key message limit is rejected before decryption; the previous and next transport keys expire on their own clock (REJECT_AFTER_TIME), and unfinished handshake state is dropped after three times that, so a stale half-handshake can no longer be completed days later; a peer whose only keys have expired now counts as down, which is what triggers a fresh handshake; the handshake rate limiter had its subtraction backwards and never fired; the session-index allocator could pick an index another peer already used; the `keypair_update` caller kept a pointer to a slot that had just been zeroed; X25519 ignored RFC 7748's bit-255 masking on the input coordinate; our incoming-packet check no longer confuses our own sending counter with what we may still receive.
 - **Handshakes after an unsynced reboot are no longer rejected as replays.** The TAI64N timestamp base is now persisted on time-synced boots too, so a boot without SNTP continues from above the stamps peers have already seen instead of a counter far in the past. Ported from the Csontikka/microlink fork (9e07d8f).
