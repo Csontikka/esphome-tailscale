@@ -10,6 +10,10 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **The relay latency check measures what it says.** It sent one STUN probe per region 50 ms apart and only then started reading, but lwIP's UDP mailbox holds six datagrams: most of a 28-region burst was dropped before it was read, and the survivors' round-trip time was "time of the late read minus their send time", a value that fell by exactly the send gap from region to region, so the "fastest" region was simply the one probed last (our own log: 9 of 28 regions answering, Dallas chosen for a node in Hungary). Replies are now read while probing, each region gets two samples with the lower kept, and the check ends as soon as everything has answered, about 2 s. The home-region decision also compares the measured best with the region in use, not with the configured default, so two regions that both beat the default no longer alternate from netmap to netmap. This matters with `netcheck_override: true`. Ported from the Csontikka/microlink fork (7a099c1).
+- **A map session the server ends is noticed at once, in two more cases.** `GOAWAY` and `RST_STREAM` have been handled since 0.5.19; an `END_STREAM` on the map stream and an orderly close of the socket were still skipped - after the close, `recv()` returned 0 with a stale EAGAIN in errno, which read as "no data yet", and the dead session was kept until the stream watchdog gave up. Ported from the Csontikka/microlink fork (eb63b97).
+
 ## [0.5.23] — 2026-10-13
 
 ### Changed
