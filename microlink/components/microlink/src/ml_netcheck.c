@@ -36,6 +36,7 @@ static const char *TAG = "ml_netcheck";
 #define NETCHECK_MAX_RETRIES   1     /* Initial send + 1 retry = 2 attempts/region */
 #define NETCHECK_PROBE_GAP_MS  50    /* Spread sendto() to avoid local NAT/UDP burst loss */
 #define NETCHECK_MAX_PROBES    ML_MAX_DERP_REGIONS
+#define NETCHECK_SAMPLES       2     /* probes per region; the lower RTT counts (WiFi modem-sleep adds 0-100 ms of jitter to a single sample) */
 
 /* Build a 40-byte STUN Binding Request with SOFTWARE + FINGERPRINT.
  * SOFTWARE MUST be "tailnode" — the Tailscale DERP STUN servers reject
@@ -88,6 +89,94 @@ static inline bool netcheck_stop_requested(microlink_t *ml) {
     return ml->events && (xEventGroupGetBits(ml->events) & ML_EVT_SHUTDOWN_REQUEST);
 }
 
+struct nc_probe {
+    uint8_t  txid[12];      /* current (last-sent) txid */
+    uint64_t send_us;       /* last send time, for RTT math */
+    uint16_t region_id;
+    uint32_t dest_ip;       /* cached for retries */
+    uint16_t dest_port;
+    uint32_t rtt_us;        /* best (lowest) of the samples so far */
+    bool     got_response;
+    uint8_t  samples;       /* responses credited so far */
+    bool     in_flight;     /* a probe with the current txid is unanswered */
+};
+
+/* Read Binding Responses for up to wait_us and credit each to its probe.
+ *
+ * Called between every sendto() as well as in the main wait, because the
+ * replies arrive while we are still sending: the first regions answer within
+ * 20-40 ms, the send loop alone takes 50 ms per region. Reading only after the
+ * loop (as until 2026-10-13) had two effects. The lwIP UDP mailbox holds six
+ * datagrams, so most of a 20-region burst was dropped before it was read; and
+ * the RTT of the survivors was "time of the late read minus their send time",
+ * a value that fell by exactly the send gap from one region to the next, so
+ * the "fastest" region was simply the one probed last (the 400/450/500 ms
+ * staircase in the diagnostics, London picked for a Hungarian node). */
+static void drain_replies(microlink_t *ml, int sock, struct nc_probe *probes, int probe_count, uint64_t wait_us) {
+    uint64_t until = esp_timer_get_time() + wait_us;
+    for (;;) {
+        uint64_t now = esp_timer_get_time();
+        if (now >= until || netcheck_stop_requested(ml)) return;
+        uint64_t remain = until - now;
+        if (remain > 250000ULL) remain = 250000ULL;   /* a stop request is seen within a quarter second */
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(sock, &rfds);
+        struct timeval tv;
+        tv.tv_sec  = remain / 1000000;
+        tv.tv_usec = remain % 1000000;
+        int rs = select(sock + 1, &rfds, NULL, NULL, &tv);
+        if (rs <= 0) continue;
+
+        uint8_t buf[256];
+        struct sockaddr_in from;
+        socklen_t fromlen = sizeof(from);
+        int n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&from, &fromlen);
+        if (n < 20) continue;
+        if (buf[0] != 0x01 || buf[1] != 0x01) continue;  /* not Binding Response */
+
+        uint64_t recv_us = esp_timer_get_time();
+        for (int i = 0; i < probe_count; i++) {
+            if (memcmp(buf + 8, probes[i].txid, 12) != 0) continue;
+            if (!probes[i].in_flight) continue;   /* a late duplicate of an answered txid */
+            uint32_t rtt = (uint32_t)(recv_us - probes[i].send_us);
+            if (!probes[i].got_response || rtt < probes[i].rtt_us) probes[i].rtt_us = rtt;
+            probes[i].got_response = true;
+            probes[i].in_flight = false;
+            probes[i].samples++;
+            ESP_LOGI(TAG, "region %d RTT=%lu ms (sample %u, best %lu ms)", probes[i].region_id,
+                     (unsigned long)(rtt / 1000), probes[i].samples, (unsigned long)(probes[i].rtt_us / 1000));
+
+            /* Walk TLVs for XOR-MAPPED-ADDRESS (type 0x0020). RFC 5389:
+             * value = reserved(1) | family(1) | x-port(2) | x-addr(4 or 16),
+             * X-bytes XORed with the magic cookie 0x2112A442. */
+            if (ml->stun_public_ip == 0) {
+                size_t pos = 20;
+                while (pos + 4 <= (size_t)n) {
+                    uint16_t atype = ((uint16_t)buf[pos] << 8) | buf[pos + 1];
+                    uint16_t alen  = ((uint16_t)buf[pos + 2] << 8) | buf[pos + 3];
+                    pos += 4;
+                    if (pos + alen > (size_t)n) break;
+                    if (atype == 0x0020 && alen >= 8 && buf[pos + 1] == 0x01) {
+                        uint8_t a = buf[pos + 4] ^ 0x21;
+                        uint8_t b = buf[pos + 5] ^ 0x12;
+                        uint8_t c = buf[pos + 6] ^ 0xA4;
+                        uint8_t d = buf[pos + 7] ^ 0x42;
+                        ml->stun_public_ip =
+                            ((uint32_t)a << 24) | ((uint32_t)b << 16) |
+                            ((uint32_t)c << 8)  |  (uint32_t)d;
+                        char ip_str[16];
+                        microlink_ip_to_str(ml->stun_public_ip, ip_str);
+                        ESP_LOGI(TAG, "STUN public IP: %s (from region %d)",
+                                 ip_str, probes[i].region_id);
+                        break;
+                    }
+                    pos += (alen + 3U) & ~3U;
+                }
+            }
+            break;
+        }
+    }
+}
+
 uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     if (!ml || ml->derp_region_count == 0) return 0;
 
@@ -126,15 +215,7 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
         }
     }
 
-    struct probe {
-        uint8_t  txid[12];      /* current (last-sent) txid */
-        uint64_t send_us;       /* last send time, for RTT math */
-        uint16_t region_id;
-        uint32_t dest_ip;       /* cached for retries */
-        uint16_t dest_port;
-        uint32_t rtt_us;
-        bool     got_response;
-    } probes[NETCHECK_MAX_PROBES];
+    struct nc_probe probes[NETCHECK_MAX_PROBES];
     int probe_count = 0;
 
     int regions = ml->derp_region_count < NETCHECK_MAX_PROBES ?
@@ -169,6 +250,8 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
         probes[probe_count].dest_port = stun_port;
         probes[probe_count].rtt_us = 0;
         probes[probe_count].got_response = false;
+        probes[probe_count].samples = 0;
+        probes[probe_count].in_flight = true;
         probes[probe_count].send_us = esp_timer_get_time();
 
         if (sendto(sock, pkt, pkt_len, 0, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
@@ -176,41 +259,28 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
             continue;
         }
         probe_count++;
-        vTaskDelay(pdMS_TO_TICKS(NETCHECK_PROBE_GAP_MS));
+        drain_replies(ml, sock, probes, probe_count, (uint64_t)NETCHECK_PROBE_GAP_MS * 1000ULL);   /* read while sending */
     }
     ESP_LOGI(TAG, "sent %d STUN probes, retrying every %d ms up to %d ms total",
              probe_count, NETCHECK_RETRY_GAP_MS, NETCHECK_TIMEOUT_MS);
 
     uint64_t started = esp_timer_get_time();
     uint64_t deadline = started + (uint64_t)NETCHECK_TIMEOUT_MS * 1000ULL;
-    uint64_t next_retry_at = started + (uint64_t)NETCHECK_RETRY_GAP_MS * 1000ULL;
+    uint64_t next_retry_at = esp_timer_get_time() + (uint64_t)NETCHECK_RETRY_GAP_MS * 1000ULL;
     int retries_done = 0;
-    int responded = 0;
 
     while (esp_timer_get_time() < deadline && !netcheck_stop_requested(ml)) {
         uint64_t now = esp_timer_get_time();
 
-        /* Done early: every region answered, or the first retry is due
-         * (NETCHECK_RETRY_GAP_MS) and we already have answers - a region
-         * still silent after that long is blocked or far away and will not
-         * become the best pick, so the retries are only worth it when
-         * nothing answered at all. This loop used to run the whole
-         * NETCHECK_TIMEOUT_MS budget regardless, and it runs on the coord
-         * task before the DERP connect and the long-poll: 27 s of every
-         * connect on both boards. The reference client caps its full
-         * report at about 5 s as well. */
-        if (responded == probe_count || (responded > 0 && now >= next_retry_at)) {
-            break;
-        }
-
-        /* Retry sweep: re-send to any region we haven't heard from yet.
-         * Regenerates the txid so the new attempt is the one we match
-         * against — old/late responses are silently dropped. */
+        /* Retry sweep: re-send to any region that has not answered yet, and
+         * to any region that has fewer than NETCHECK_SAMPLES answers. Regenerates
+         * the txid so the new attempt is the one we match against — old/late
+         * responses are silently dropped. */
         if (retries_done < NETCHECK_MAX_RETRIES && now >= next_retry_at) {
             int retried = 0;
             for (int i = 0; i < probe_count; i++) {
                 if (netcheck_stop_requested(ml)) break;
-                if (probes[i].got_response) continue;
+                if (probes[i].samples >= NETCHECK_SAMPLES) continue;
                 uint8_t pkt[40];
                 size_t pkt_len = build_stun_binding(pkt, probes[i].txid);
                 struct sockaddr_in dest = {0};
@@ -219,9 +289,10 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
                 dest.sin_addr.s_addr = probes[i].dest_ip;
                 if (sendto(sock, pkt, pkt_len, 0, (struct sockaddr *)&dest, sizeof(dest)) >= 0) {
                     probes[i].send_us = esp_timer_get_time();
+                    probes[i].in_flight = true;
                     retried++;
                 }
-                vTaskDelay(pdMS_TO_TICKS(NETCHECK_PROBE_GAP_MS));
+                drain_replies(ml, sock, probes, probe_count, (uint64_t)NETCHECK_PROBE_GAP_MS * 1000ULL);   /* read while sending */
             }
             retries_done++;
             ESP_LOGI(TAG, "retry %d/%d: re-sent %d probes",
@@ -235,63 +306,23 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
         now = esp_timer_get_time();
         if (wait_until <= now) continue;
         uint64_t remain = wait_until - now;
-        /* Short slices so a stop request is seen within a quarter second. */
-        if (remain > 250000ULL) remain = 250000ULL;
-
-        fd_set rfds; FD_ZERO(&rfds); FD_SET(sock, &rfds);
-        struct timeval tv;
-        tv.tv_sec  = remain / 1000000;
-        tv.tv_usec = remain % 1000000;
-        int rs = select(sock + 1, &rfds, NULL, NULL, &tv);
-        if (rs <= 0) continue;   /* timed out before next retry tick; loop & re-check */
-
-        uint8_t buf[256];
-        struct sockaddr_in from;
-        socklen_t fromlen = sizeof(from);
-        int n = recvfrom(sock, buf, sizeof(buf), 0,
-                         (struct sockaddr *)&from, &fromlen);
-        if (n < 20) continue;
-        if (buf[0] != 0x01 || buf[1] != 0x01) continue;  /* not Binding Response */
-
-        uint64_t recv_us = esp_timer_get_time();
+        if (remain > 250000ULL) remain = 250000ULL;   /* re-evaluate the exit conditions below every quarter second */
+        drain_replies(ml, sock, probes, probe_count, remain);
+        /* Done early when every region has its samples, or when the retry
+         * budget is spent and nothing is in flight any more. */
+        bool all_sampled = probe_count > 0, any_in_flight = false;
         for (int i = 0; i < probe_count; i++) {
-            if (probes[i].got_response) continue;
-            if (memcmp(buf + 8, probes[i].txid, 12) != 0) continue;
-            probes[i].rtt_us = (uint32_t)(recv_us - probes[i].send_us);
-            probes[i].got_response = true;
-            responded++;
-            ESP_LOGI(TAG, "region %d RTT=%lu ms", probes[i].region_id,
-                     (unsigned long)(probes[i].rtt_us / 1000));
-
-            /* Walk TLVs for XOR-MAPPED-ADDRESS (type 0x0020). RFC 5389:
-             * value = reserved(1) | family(1) | x-port(2) | x-addr(4 or 16),
-             * X-bytes XORed with the magic cookie 0x2112A442. */
-            if (ml->stun_public_ip == 0) {
-                size_t pos = 20;
-                while (pos + 4 <= (size_t)n) {
-                    uint16_t atype = ((uint16_t)buf[pos] << 8) | buf[pos + 1];
-                    uint16_t alen  = ((uint16_t)buf[pos + 2] << 8) | buf[pos + 3];
-                    pos += 4;
-                    if (pos + alen > (size_t)n) break;
-                    if (atype == 0x0020 && alen >= 8 && buf[pos + 1] == 0x01) {
-                        uint8_t a = buf[pos + 4] ^ 0x21;
-                        uint8_t b = buf[pos + 5] ^ 0x12;
-                        uint8_t c = buf[pos + 6] ^ 0xA4;
-                        uint8_t d = buf[pos + 7] ^ 0x42;
-                        ml->stun_public_ip =
-                            ((uint32_t)a << 24) | ((uint32_t)b << 16) |
-                            ((uint32_t)c << 8)  |  (uint32_t)d;
-                        char ip_str[16];
-                        microlink_ip_to_str(ml->stun_public_ip, ip_str);
-                        ESP_LOGI(TAG, "STUN public IP: %s (from region %d)",
-                                 ip_str, probes[i].region_id);
-                        break;
-                    }
-                    pos += (alen + 3U) & ~3U;
-                }
-            }
-            break;
+            if (probes[i].samples < NETCHECK_SAMPLES) all_sampled = false;
+            if (probes[i].in_flight) any_in_flight = true;
         }
+        if (all_sampled) break;
+        if (retries_done >= NETCHECK_MAX_RETRIES && !any_in_flight) break;
+        /* A region with one answer is not waited for across a 5 s retry gap:
+         * once everything has answered at least once, the second sample
+         * round follows at once. */
+        bool all_answered = true;
+        for (int i = 0; i < probe_count && all_answered; i++) all_answered = probes[i].got_response;
+        if (all_answered && !any_in_flight && retries_done < NETCHECK_MAX_RETRIES) next_retry_at = esp_timer_get_time();
     }
     close(sock);
     if (netcheck_stop_requested(ml)) {
@@ -322,8 +353,10 @@ uint16_t ml_netcheck_pick_best_derp(microlink_t *ml) {
     if (best_region == 0) {
         ESP_LOGW(TAG, "no DERP region responded — falling back to default");
     } else {
+        int answered = 0;
+        for (int i = 0; i < probe_count; i++) if (probes[i].got_response) answered++;
         ESP_LOGI(TAG, "best DERP = region %d (%lu ms); %d/%d regions answered in %lu ms",
-                 best_region, (unsigned long)(best_rtt / 1000), responded, probe_count,
+                 best_region, (unsigned long)(best_rtt / 1000), answered, probe_count,
                  (unsigned long)((esp_timer_get_time() - started) / 1000));
     }
     return best_region;
