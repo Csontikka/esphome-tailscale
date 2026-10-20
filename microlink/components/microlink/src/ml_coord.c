@@ -642,9 +642,17 @@ static int coord_send(microlink_t *ml, const uint8_t *data, size_t len) {
     return 0;
 }
 
+/* A read that stalls after part of a frame has been consumed is given this
+ * long by the clock. The receive timeout on the socket is 60 s on the long
+ * poll (2 s during the handshake), so a retry counter measured wall time in
+ * multiples of that: the old 300 retries were hours, with the coord task
+ * (and the 120 s stream watchdog it drives) stuck in here the whole time.
+ * Ported from the Csontikka/microlink fork (ee47277). */
+#define ML_COORD_PARTIAL_READ_MS 5000
+
 static int coord_recv(microlink_t *ml, uint8_t *buf, size_t len) {
     size_t recvd = 0;
-    int retries = 0;
+    int64_t partial_since_us = 0;
     while (recvd < len) {
         int n = ml_conn_read(ml, buf + recvd, len - recvd);
         if (n == 0) {
@@ -663,10 +671,16 @@ static int coord_recv(microlink_t *ml, uint8_t *buf, size_t len) {
                     return -1;
                 }
                 /* Partial data consumed — we MUST finish this read or the
-                 * Noise frame stream will be misaligned. Retry with backoff. */
-                if (++retries > 300) {  /* ~3 seconds */
-                    ESP_LOGE(TAG, "coord_recv partial timeout: %d/%d bytes",
-                             (int)recvd, (int)len);
+                 * Noise frame stream will be misaligned. Retry briefly; then
+                 * give up with an errno the callers treat as a transport
+                 * error. EAGAIN here used to read as "no data yet", and the
+                 * long poll kept polling a stream it could no longer parse. */
+                int64_t now_us = esp_timer_get_time();
+                if (partial_since_us == 0) partial_since_us = now_us;
+                if (now_us - partial_since_us >= (int64_t)ML_COORD_PARTIAL_READ_MS * 1000) {
+                    ESP_LOGE(TAG, "coord_recv partial timeout: %d/%d bytes after %d ms",
+                             (int)recvd, (int)len, (int)((now_us - partial_since_us) / 1000));
+                    errno = ETIMEDOUT;
                     return -1;
                 }
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -677,7 +691,7 @@ static int coord_recv(microlink_t *ml, uint8_t *buf, size_t len) {
             return -1;
         }
         recvd += n;
-        retries = 0;  /* Reset on successful read */
+        partial_since_us = 0;  /* progress: the stall clock restarts */
     }
     return 0;
 }
@@ -771,16 +785,21 @@ static int noise_recv_into(microlink_t *ml, ml_noise_state_t *noise,
     }
 
     /* Header already consumed — payload read MUST complete or stream
-     * alignment is permanently lost. Retry EAGAIN (coord_recv returns -1
-     * with errno==EAGAIN if recvd==0 on first byte). */
-    int payload_retries = 0;
+     * alignment is permanently lost. coord_recv returns -1 with EAGAIN only
+     * when it consumed nothing (the socket timeout passed before the first
+     * payload byte); a stall after a partial read comes back as ETIMEDOUT.
+     * Both are bounded by the clock: the same 5 s as inside coord_recv, so a
+     * server that dies between header and payload costs seconds, not the
+     * hours the old 300-retry counter spent on a 60 s socket timeout. */
+    int64_t payload_since_us = esp_timer_get_time();
     while (coord_recv(ml, ciphertext, ct_len) < 0) {
-        if ((errno == EAGAIN || errno == EWOULDBLOCK) && ++payload_retries <= 300) {
+        if ((errno == EAGAIN || errno == EWOULDBLOCK) &&
+            esp_timer_get_time() - payload_since_us < (int64_t)ML_COORD_PARTIAL_READ_MS * 1000) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
-        ESP_LOGE(TAG, "noise_recv payload failed: ct_len=%d retries=%d errno=%d",
-                 ct_len, payload_retries, errno);
+        if (errno == EAGAIN || errno == EWOULDBLOCK) errno = ETIMEDOUT;   /* a header with no payload is not "no data yet" */
+        ESP_LOGE(TAG, "noise_recv payload failed: ct_len=%d errno=%d", ct_len, errno);
         free(ciphertext);
         return -1;
     }
