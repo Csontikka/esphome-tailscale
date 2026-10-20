@@ -1427,7 +1427,13 @@ static cJSON *build_hostinfo(microlink_t *ml) {
     }
     cJSON *netinfo = cJSON_CreateObject();
     if (netinfo) {
-        cJSON_AddNumberToObject(netinfo, "PreferredDERP", ml->derp_region_default);
+        /* The region we actually sit on. Peers reach us through the region the
+         * control plane advertises for us, and that is this value echoed back
+         * as Node.HomeDERP: reporting the configured default while the relay
+         * connection followed the netcheck pick sent peers to a relay we were
+         * not connected to. Ported from the Csontikka/microlink fork (21929f5). */
+        cJSON_AddNumberToObject(netinfo, "PreferredDERP",
+                                ml->derp_home_region ? ml->derp_home_region : ml->derp_region_default);
         if (ml->stun_nat_checked) {
             cJSON_AddBoolToObject(netinfo, "MappingVariesByDestIP", ml->nat_mapping_varies);
         }
@@ -2438,6 +2444,15 @@ static bool derp_map_finish(microlink_t *ml) {
                 ESP_LOGI(TAG, "Netcheck override: %u (%ums) -> %u (%ums), improvement %ldms >= %ldms threshold",
                          cur, cur_rtt, measured, measured_rtt, (long)improvement, (long)thresh);
                 ml->derp_home_region = measured;
+                /* The control plane learns the new home with the next Hostinfo
+                 * (endpoint update), and the relay connection follows: the
+                 * home relay is where peers send to us, so sitting on the old
+                 * one would lose relayed traffic until the next reconnect. */
+                ml->netinfo_dirty = true;
+                if (ml->derp.connected) {
+                    ESP_LOGW(TAG, "Home relay region %u -> %u: reconnecting the relay", cur, measured);
+                    xEventGroupSetBits(ml->events, ML_EVT_DERP_RECONNECT);
+                }
             } else {
                 ESP_LOGI(TAG, "Netcheck found %u (%ums) faster than current %u (%ums) but improvement %ldms < %ldms threshold — staying",
                          measured, measured_rtt, cur, cur_rtt, (long)improvement, (long)thresh);
@@ -3136,10 +3151,13 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
             }
             /* Parse self-node DERP region — try modern HomeDERP (int) first,
              * then fall back to legacy DERP string (format: "127.3.3.40:REGION") */
+            /* Node.HomeDERP is the control plane's echo of the PreferredDERP we
+             * sent (tailscale Go semantics), so it only seeds a region we do not
+             * have yet; a measured pick (parse_derp_map_from_response) stays. */
             cJSON *home_derp = cJSON_GetObjectItem(node, "HomeDERP");
             if (home_derp && cJSON_IsNumber(home_derp) && home_derp->valueint > 0) {
-                ml->derp_home_region = (uint16_t)home_derp->valueint;
-                ESP_LOGI(TAG, "Home DERP region: %d (from server, HomeDERP)", ml->derp_home_region);
+                if (ml->derp_home_region == 0) ml->derp_home_region = (uint16_t)home_derp->valueint;
+                ESP_LOGI(TAG, "Home DERP region: %d (server echo %d)", ml->derp_home_region, home_derp->valueint);
             } else {
                 cJSON *self_derp = cJSON_GetObjectItem(node, "DERP");
                 if (self_derp && self_derp->valuestring) {
@@ -3148,8 +3166,8 @@ static int do_map_exchange(microlink_t *ml, ml_noise_state_t *noise, bool send_r
                     if (colon) {
                         int region = atoi(colon + 1);
                         if (region > 0) {
-                            ml->derp_home_region = (uint16_t)region;
-                            ESP_LOGI(TAG, "Home DERP region: %d (from server, legacy DERP)", region);
+                            if (ml->derp_home_region == 0) ml->derp_home_region = (uint16_t)region;
+                            ESP_LOGI(TAG, "Home DERP region: %d (server legacy echo %d)", ml->derp_home_region, region);
                         }
                     }
                 }
@@ -3333,6 +3351,7 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
         free(json_str);
         return 0;
     }
+    ml->netinfo_dirty = false;
     ESP_LOGI(TAG, "Endpoint update: %d bytes, %d endpoints (Stream=false, OmitPeers=true)",
              (int)json_len, ep_count);
 
@@ -3915,6 +3934,11 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
                 apply_long_poll_map(ml, update_json);
                 cJSON_Delete(update_json);
                 s_map_text = NULL;
+                /* A home-region change made from a streamed DERPMap: the
+                 * control plane gets the new NetInfo now, not at the next
+                 * reconnect. (The full-netmap path is followed by the
+                 * initial endpoint update anyway.) */
+                if (ml->netinfo_dirty) do_send_endpoint_update(ml, noise);
             } else {
                 ESP_LOGW(TAG, "long-poll: %lu-byte message failed to parse", (unsigned long)size);
             }
