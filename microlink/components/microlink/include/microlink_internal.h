@@ -606,6 +606,7 @@ struct microlink_s {
     /* Most recent netcheck RTT measurements per derp_regions[] slot.
      * Same index as derp_regions; 0 = no measurement / timed out. */
     uint16_t derp_rtt_ms[ML_MAX_DERP_REGIONS];
+    bool netinfo_dirty;            /* derp_home_region changed since the last Hostinfo the control plane saw */
     /* The DERPMap the last netcheck measured (fingerprint of region ids,
      * node hostnames and STUN ports), when it ran and what it picked - a
      * DERPMap arriving again unchanged on the stream reuses the result

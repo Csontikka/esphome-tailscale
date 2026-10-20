@@ -440,6 +440,7 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 					now = wireguard_sys_now();
 					peer->last_tx = now;
 					keypair->last_tx = now;
+					if (q && peer->last_data_tx == 0) peer->last_data_tx = now;   /* keepalives (q == NULL) never arm it */
 				}
 
 				pbuf_free(pbuf);
@@ -554,6 +555,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		update_peer_addr(peer, addr, port);
 
 		peer->handshake_attempts = 0;  // session up, reset retry counter
+		peer->last_data_tx = 0;        // heard from the peer
 		ESP_LOGW(TAG, "[WG] Session started, sending keepalive to %s:%u",
 		       ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip), peer->port);
 		wireguardif_send_keepalive(device, peer);
@@ -639,6 +641,7 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					now = wireguard_sys_now();
 					keypair->last_rx = now;
 					peer->last_rx = now;
+					peer->last_data_tx = 0;   /* heard from the peer */
 
 					// Might need to shuffle next key --> current keypair
 					keypair = keypair_update(peer, keypair);
@@ -790,6 +793,7 @@ static void wireguardif_send_handshake_response(struct wireguard_device *device,
 
 		if (!wireguard_start_session(peer, false)) return;
 		peer->handshake_attempts = 0;  // session up, reset retry counter
+		peer->last_data_tx = 0;        // heard from the peer
 
 		// Send this packet out!
 		pbuf = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct message_handshake_response), PBUF_RAM);
@@ -1292,6 +1296,21 @@ static bool should_send_initiation(struct wireguard_peer *peer) {
 	bool result = false;
 	if (wireguardif_can_send_initiation(peer)) {
 		if (peer->send_handshake) {
+			result = true;
+		} else if (peer->curr_keypair.valid && peer->last_data_tx != 0 &&
+		           wireguard_expired(peer->last_data_tx, REKEY_TIMEOUT + KEEPALIVE_TIMEOUT)) {
+			/* wireguard-go timerNewHandshake: we sent data on a valid key and
+			 * nothing authenticated came back for 15 s. A peer that restarted
+			 * (or lost its session) drops our packets silently and never
+			 * initiates toward us; only a new handshake brings it back. One
+			 * shot: the next data packet re-arms the timer, so a dead peer is
+			 * retried every 15 s while something still sends to it. */
+			peer->last_data_tx = 0;
+			/* Unconditional like WG_RESET/WG_DESTROY: at most one line per 15 s of unanswered data. */
+			ESP_LOGW(TAG, "[WG_REHANDSHAKE] peer=%02x%02x%02x%02x no reply for %ds after data, ep=%s:%u",
+			         peer->public_key[0], peer->public_key[1], peer->public_key[2], peer->public_key[3],
+			         REKEY_TIMEOUT + KEEPALIVE_TIMEOUT,
+			         ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip), peer->port);
 			result = true;
 		} else if (peer->curr_keypair.valid && !peer->curr_keypair.initiator && wireguard_expired(peer->curr_keypair.keypair_millis, REJECT_AFTER_TIME - peer->keepalive_interval)) {
 			result = true;

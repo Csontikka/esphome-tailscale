@@ -181,6 +181,10 @@ struct wireguard_peer {
 	// last_tx and last_rx of data packets
 	uint32_t last_tx;
 	uint32_t last_rx;
+	// First data packet sent since the last authenticated packet arrived, 0 = nothing
+	// unanswered. wireguard-go's timerNewHandshake: armed by data (not keepalives),
+	// disarmed by anything authenticated from the peer, fires after 15 s.
+	uint32_t last_data_tx;
 
 	// We set this flag on RX/TX of packets if we think that we should initiate a new handshake
 	bool send_handshake;
