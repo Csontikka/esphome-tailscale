@@ -47,7 +47,27 @@ static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force);
 /* lwIP requires netif state changes to happen in tcpip_thread context.
  * ESP-IDF v5.5+ asserts this strictly (LWIP_ASSERT_CORE_LOCKED). With
  * CONFIG_LWIP_TCPIP_CORE_LOCKING=n we cannot LOCK_TCPIP_CORE() the
- * wg_mgr task, so route the bring-up calls through tcpip_callback_with_block. */
+ * wg_mgr task, so route the lifecycle calls through wg_tcpip_sync (below). */
+/* Run fn(arg) on the TCPIP thread and wait for it to finish. NOT
+ * tcpip_callback_with_block(): that only blocks on posting the message, so a
+ * caller that goes on to free the netif races the TCPIP thread that has not
+ * yet unlinked it from netif_list -- a use-after-free seen as heap corruption
+ * in ip4_route / dhcp_coarse_tmr / nd6_tmr on uplink roams in the
+ * Csontikka/microlink fork (ee47277 + a85e8c4, 2026-10-20). */
+struct wg_tcpip_call { void (*fn)(void *); void *arg; };
+static esp_err_t wg_tcpip_exec_wrap(void *ctx)
+{
+    struct wg_tcpip_call *c = (struct wg_tcpip_call *)ctx;
+    c->fn(c->arg);
+    return ESP_OK;
+}
+static void wg_tcpip_sync(void (*fn)(void *), void *arg)
+{
+    struct wg_tcpip_call c = { .fn = fn, .arg = arg };
+    esp_err_t e = esp_netif_tcpip_exec(wg_tcpip_exec_wrap, &c);
+    if (e != ESP_OK) ESP_LOGE(TAG, "esp_netif_tcpip_exec failed: %s", esp_err_to_name(e));
+}
+
 static void wg_netif_bring_up_cb(void *ctx)
 {
     struct netif *netif = (struct netif *)ctx;
@@ -58,6 +78,27 @@ static void wg_netif_bring_up_cb(void *ctx)
     netif_list = netif;
     netif_set_up(netif);
     netif_set_link_up(netif);
+}
+
+/* wireguardif_init creates and binds the device's UDP PCB and arms the
+ * periodic timer: PCB and timeout list are TCPIP-thread state too. */
+struct wg_init_ctx { struct netif *netif; err_t err; };
+static void wg_netif_init_cb(void *ctx)
+{
+    struct wg_init_ctx *c = (struct wg_init_ctx *)ctx;
+    c->err = wireguardif_init(c->netif);
+}
+
+/* Teardown mirror of the above: link down, down, out of the list, and the
+ * WireGuard device (its UDP PCB included, its timer disarmed) released, all
+ * on the TCPIP thread. */
+static void wg_netif_take_down_cb(void *ctx)
+{
+    struct netif *netif = (struct netif *)ctx;
+    netif_set_link_down(netif);
+    netif_set_down(netif);
+    netif_remove(netif);
+    wireguardif_free(netif);
 }
 
 /* Same TCPIP-context rule applies to udp_new() and any UDP-PCB field writes.
@@ -402,7 +443,9 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
 
     /* Initialize WireGuard netif */
     netif->state = &wg_init;
-    err_t err = wireguardif_init(netif);
+    struct wg_init_ctx init_ctx = { .netif = netif, .err = ERR_VAL };
+    wg_tcpip_sync(wg_netif_init_cb, &init_ctx);
+    err_t err = init_ctx.err;
     if (err != ERR_OK) {
         ESP_LOGE(TAG, "wireguardif_init failed: %d", err);
         free(netif);
@@ -430,7 +473,7 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
 
     /* Add to lwIP's netif list and bring the interface up on tcpip_thread
      * (see wg_netif_bring_up_cb above) */
-    tcpip_callback_with_block(wg_netif_bring_up_cb, netif, 1);
+    wg_tcpip_sync(wg_netif_bring_up_cb, netif);
 
     /* Create raw UDP PCB for WG output (avoids BSD sendto deadlock on TCPIP
      * thread).  Bind to port 51820 to match the DISCO socket source port.
@@ -440,7 +483,7 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
         /* Allocate + configure on tcpip_thread (see wg_udp_pcb_create_cb above).
          * Avoiding udp_bind keeps WG responses on the DISCO BSD socket;
          * udp_sendto only needs local_port set on the PCB. */
-        tcpip_callback_with_block(wg_udp_pcb_create_cb, &s_wg_output_pcb, 1);
+        wg_tcpip_sync(wg_udp_pcb_create_cb, &s_wg_output_pcb);
     }
 
     /* Register output callbacks for magicsock mode */
@@ -2432,15 +2475,14 @@ void ml_wg_mgr_task(void *arg) {
     if (ml->wg_netif) {
         struct netif *netif = (struct netif *)ml->wg_netif;
         ml->wg_netif = NULL;
-        wireguardif_shutdown(netif);
-        netif_set_link_down(netif);
-        netif_set_down(netif);
-        vTaskDelay(pdMS_TO_TICKS(100));
-        netif_remove(netif);
-        /* The struct wireguard_device behind netif->state (every peer's
-         * keypairs; ~14.7 KB on the S3 build) was never released: only the
-         * netif around it was, so each stop/start cycle leaked it. */
-        wireguardif_free(netif);
+        /* Down, out of the netif list and the WireGuard device freed (every
+         * peer's keypairs; ~14.7 KB on the S3 build, once leaked here) -- on
+         * the TCPIP thread, the only one that may touch the list and the
+         * UDP PCB with core locking off (the timer is disarmed in there too:
+         * wireguardif_free untimeouts, so no separate wireguardif_shutdown
+         * from this task), and waited for: nothing refers to the netif once
+         * the callback has run. */
+        wg_tcpip_sync(wg_netif_take_down_cb, netif);
         free(netif);
     }
 

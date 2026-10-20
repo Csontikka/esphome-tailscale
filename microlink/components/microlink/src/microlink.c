@@ -609,6 +609,15 @@ esp_err_t microlink_stop(microlink_t *ml) {
     if (ml->stun_sock >= 0) { ml_close_sock(ml->stun_sock); ml->stun_sock = -1; }
     if (ml->stun_sock6 >= 0) { ml_close_sock(ml->stun_sock6); ml->stun_sock6 = -1; }
 
+    if (ml->stop_incomplete) {
+        /* A task still runs on this instance. IDLE would let microlink_start
+         * build a second set of tasks on top of it; ERROR keeps it out of
+         * service until microlink_destroy's second stop finds it quiescent.
+         * Ported from the Csontikka/microlink fork (ee47277). */
+        ml->state = ML_STATE_ERROR;
+        ESP_LOGE(TAG, "Stopped with a task still running: instance out of service");
+        return ESP_ERR_TIMEOUT;
+    }
     ml->state = ML_STATE_IDLE;
     ESP_LOGI(TAG, "Stopped");
     return ESP_OK;
