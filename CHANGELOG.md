@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.28] — 2026-10-20
+
 ### Fixed
 - **The relay region reported to the control plane is the one the device actually uses.** `Hostinfo.NetInfo.PreferredDERP` carried the configured default region even when `netcheck_override` had moved the relay connection to a faster one; the control plane echoes that value to every peer as our home relay, so a peer without a direct path sent its WireGuard packets to a relay we were not connected to. The measured home region is now reported; the server's echo only seeds a region we do not have yet instead of undoing the measured pick on every full netmap; and when the pick changes, the new NetInfo goes out at once and the relay connection moves with it. Ported from the Csontikka/microlink fork (21929f5).
 - **A peer that went silent after we sent it data gets a new handshake after 15 seconds.** wireguard-go's `timerNewHandshake`: data sent on a valid key with nothing authenticated back for REKEY_TIMEOUT + KEEPALIVE_TIMEOUT starts a new handshake. A peer that restarted drops our packets silently and, with no traffic of its own, never initiates, so the tunnel to it used to stay dead until the key aged out (up to 180 s). Keepalives do not arm the timer, any authenticated packet from the peer disarms it, and it is one-shot, so a live peer never triggers it. Ported from the Csontikka/microlink fork (21929f5).
