@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.27] — 2026-10-20
+
 ### Fixed
 - **The WireGuard interface is created and torn down on the lwIP thread, and the stop waits for it.** The interface's init (its UDP control block and periodic timer), its link into lwIP's interface list and its bring-up were posted to the TCPIP thread without waiting for them, and the take-down (link down, removal from the list, freeing the WireGuard device) ran inline on the manager task while the TCPIP thread walks that list for every forwarded packet and owns the timer and control-block lists. With lwIP core locking off these were races; the fork saw them as heap corruption and a panic in the TCPIP task on uplink roams. All four steps now run on the TCPIP thread through `esp_netif_tcpip_exec`, which returns only after the step has completed, so nothing frees an interface the stack may still be looking at. Ported from the Csontikka/microlink fork (ee47277, a85e8c4).
 - **A control-plane read that stalls mid-frame now gives up after 5 seconds, not hours.** A Noise frame is read in two parts; if the server went away between header and payload, the retry counter was measured in multiples of the socket timeout (60 s on the long poll), so the coord task could sit in the read for up to five hours, with the stream watchdog it drives waiting with it. The stall is now bounded by the clock and reported as a transport error, which triggers the normal reconnect. Ported from the Csontikka/microlink fork (ee47277).
