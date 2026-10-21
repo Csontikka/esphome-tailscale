@@ -1915,6 +1915,25 @@ bool ml_wg_mgr_peer_is_up(microlink_t *ml, uint32_t vpn_ip) {
 
 static int disco_probe_start_idx = 0;
 
+/* The wireguard-lwip peer behind a microlink peer, or NULL when it has none. */
+static struct wireguard_peer *ml_wg_peer(microlink_t *ml, const ml_peer_t *p) {
+    if (!ml->wg_netif || p->wg_peer_index < 0 || p->wg_peer_index >= WIREGUARD_MAX_PEERS) {
+        return NULL;
+    }
+    struct wireguard_device *dev =
+        (struct wireguard_device *)((struct netif *)ml->wg_netif)->state;
+    return dev ? &dev->peers[p->wg_peer_index] : NULL;
+}
+
+/* Age in ms of a wireguard_sys_now() stamp, 0xFFFFFFFF if it was never set.
+ * Saturates the unsigned wrap seen when the WG layer updates the stamp
+ * between our two reads. */
+static uint32_t wg_stamp_age_ms(uint32_t stamp) {
+    if (!stamp) return 0xFFFFFFFF;
+    uint32_t age = wireguard_sys_now() - stamp;
+    return (age > 0x7FFFFFFFu) ? 0 : age;
+}
+
 static void disco_periodic_probes(microlink_t *ml) {
     uint64_t now = ml_get_time_ms();
     int upgrade_probes_sent = 0;
@@ -1947,34 +1966,34 @@ static void disco_periodic_probes(microlink_t *ml) {
          * collapsed because the back-off never recovered.
          *
          * New policy:
-         *   1. Read peer->last_rx from the WG layer to see if encrypted
-         *      data is still flowing on the direct endpoint.
-         *   2. If data IS flowing (last_rx < 30 s old), KEEP the direct
+         *   1. Read the WG layer's last_rx_direct: the last authenticated
+         *      packet from this peer that arrived on a direct UDP path.
+         *      peer->last_rx is NOT enough: it is also stamped by packets
+         *      relayed through DERP, which say nothing about the direct
+         *      endpoint (see the roam case below).
+         *   2. If direct data IS flowing (< 30 s old), KEEP the direct
          *      endpoint intact — only clear has_direct_path so the upgrade
-         *      probe re-fires, and burst 3 DISCO PINGs to recover trust.
-         *   3. If data is ALSO stale, then the path really is dead and the
-         *      old behaviour (zero endpoint + DERP handshake) is correct.
+         *      probe re-fires, and send one DISCO PING to recover trust.
+         *   3. If direct data is ALSO stale, then the path really is dead and
+         *      the old behaviour (zero endpoint + DERP handshake) is correct.
+         *
+         * Roam case: the ESP moves to another uplink (home Wi-Fi -> phone
+         * hotspot) while a peer still has the direct endpoint confirmed on
+         * the old network. The peer notices first and talks to us over DERP;
+         * those packets kept last_rx fresh, so step 2 kept the dead endpoint,
+         * and because has_direct_path was then false this check never ran
+         * again: every reply to that peer went to an address the new uplink
+         * cannot reach until the next reboot. An endpoint kept in step 2 is
+         * therefore re-checked on every tick (kept_endpoint) and reverted to
+         * DERP once no direct packet has arrived for 30 s.
          */
-        if (p->has_direct_path && now > p->trust_until_ms) {
-            /* Look up WG-side last_rx age before deciding. */
-            uint32_t last_rx_age_ms = 0xFFFFFFFF;
-            if (ml->wg_netif && p->wg_peer_index >= 0 &&
-                p->wg_peer_index < WIREGUARD_MAX_PEERS) {
-                struct netif *netif = (struct netif *)ml->wg_netif;
-                struct wireguard_device *dev = (struct wireguard_device *)netif->state;
-                if (dev) {
-                    struct wireguard_peer *wp = &dev->peers[p->wg_peer_index];
-                    if (wp->last_rx) {
-                        uint32_t now_wg = wireguard_sys_now();
-                        uint32_t age = now_wg - wp->last_rx;
-                        /* Saturate against the unsigned wrap that fires
-                         * when last_rx is updated mid-read. */
-                        last_rx_age_ms = (age > 0x7FFFFFFFu) ? 0 : age;
-                    }
-                }
-            }
-
-            bool data_flowing = (last_rx_age_ms < 30000);
+        struct wireguard_peer *wp = ml_wg_peer(ml, p);
+        bool trust_expired = p->has_direct_path && now > p->trust_until_ms;
+        bool kept_endpoint = !p->has_direct_path && wp != NULL &&
+                             !ip_addr_isany(&wp->ip) && wp->port != 0;
+        if (trust_expired || kept_endpoint) {
+            uint32_t direct_rx_age_ms = wp ? wg_stamp_age_ms(wp->last_rx_direct) : 0xFFFFFFFF;
+            bool data_flowing = (direct_rx_age_ms < 30000);
 
             p->has_direct_path = false;
 
@@ -1987,15 +2006,19 @@ static void disco_periodic_probes(microlink_t *ml) {
                      * earlier version cost ~5 ms ChaCha20-Poly1305 per PING
                      * and with 11 peers triggering at the same tick blocked
                      * disco_periodic_probes for 280+ ms — that was the
-                     * remaining stutter source the operator was seeing). */
-                    ESP_LOGI(TAG, "Direct path PING-stale for %s but data flowing "
-                                  "(last_rx=%ums) - keeping endpoint, single PING",
-                             p->hostname, (unsigned)last_rx_age_ms);
-                    if (!ml_at_socket_is_ready()) {
-                        disco_send_ping_to_peer(ml, i, true);
+                     * remaining stutter source the operator was seeing).
+                     * A kept endpoint that still carries direct data needs
+                     * nothing further. */
+                    if (trust_expired) {
+                        ESP_LOGI(TAG, "Direct path PING-stale for %s but data flowing "
+                                      "(direct_rx=%ums) - keeping endpoint, single PING",
+                                 p->hostname, (unsigned)direct_rx_age_ms);
+                        if (!ml_at_socket_is_ready()) {
+                            disco_send_ping_to_peer(ml, i, true);
+                        }
                     }
                 } else {
-                    /* Encrypted data ALSO stopped — the direct path is really
+                    /* Direct data ALSO stopped — the direct path is really
                      * dead. Fall back to DERP. */
                     bool session_up = false;
                     if (ml->wg_netif && p->wg_peer_index >= 0) {
@@ -2003,23 +2026,37 @@ static void disco_periodic_probes(microlink_t *ml) {
                         session_up = (wireguardif_peer_is_up(netif, (u8_t)p->wg_peer_index,
                                                              NULL, NULL) == ERR_OK);
                         if (session_up) {
-                            ESP_LOGI(TAG, "Direct path to %s expired (last_rx=%ums), "
-                                          "reverting to DERP", p->hostname,
-                                     (unsigned)last_rx_age_ms);
+                            if (kept_endpoint) {
+                                ESP_LOGW(TAG, "Kept direct endpoint for %s carries no direct "
+                                              "traffic (direct_rx=%ums, last_rx=%ums) - "
+                                              "reverting to DERP", p->hostname,
+                                         (unsigned)direct_rx_age_ms,
+                                         (unsigned)wg_stamp_age_ms(wp->last_rx));
+                            } else {
+                                ESP_LOGI(TAG, "Direct path to %s expired (direct_rx=%ums), "
+                                              "reverting to DERP", p->hostname,
+                                         (unsigned)direct_rx_age_ms);
+                            }
                             wireguardif_connect_derp(netif, (u8_t)p->wg_peer_index);
                             ESP_LOGI(TAG, "  WG session active, falling back to DERP for %s", p->hostname);
                         }
                     }
-                    if (!session_up) {
-                        /* No WireGuard session behind this path, nothing to
-                         * fall back: this is the once-a-minute re-probe of a
-                         * session-less peer (see the heartbeat gate below). */
-                        ESP_LOGD(TAG, "Direct path to %s (no WG session): re-probe after %u s",
-                                 p->hostname, (unsigned)(ML_DISCO_TRUST_DURATION_MS / 1000));
-                    }
-                    /* One force-ping to try re-establishing direct path. */
-                    if (!ml_at_socket_is_ready()) {
-                        disco_send_ping_to_peer(ml, i, true);
+                    /* A kept endpoint without a session is left to the
+                     * DERP-only fallback below (it zeroes the endpoint on its
+                     * 30 s retry), and the regular upgrade probe re-probes a
+                     * reverted peer; only a fresh expiry gets the ping here. */
+                    if (trust_expired) {
+                        if (!session_up) {
+                            /* No WireGuard session behind this path, nothing to
+                             * fall back: this is the once-a-minute re-probe of a
+                             * session-less peer (see the heartbeat gate below). */
+                            ESP_LOGD(TAG, "Direct path to %s (no WG session): re-probe after %u s",
+                                     p->hostname, (unsigned)(ML_DISCO_TRUST_DURATION_MS / 1000));
+                        }
+                        /* One force-ping to try re-establishing direct path. */
+                        if (!ml_at_socket_is_ready()) {
+                            disco_send_ping_to_peer(ml, i, true);
+                        }
                     }
                 }
             }
@@ -2193,7 +2230,7 @@ static void dump_wg_state_snapshot(microlink_t *ml) {
             "curr=%c(age=%lums cnt=%lu) prev=%c(age=%lums) "
             "lastrx=%lums lasttx=%lums lastinit=%lums "
             "send_hs=%d hs_attempts=%u "
-            "direct=%d derp_fb=%d pong_age=%llums",
+            "direct=%d derp_fb=%d pong_age=%llums lastrx_direct=%lums",
             p->hostname, wgi,
             (unsigned)((ep_ip_u32 >> 0) & 0xFF), (unsigned)((ep_ip_u32 >> 8) & 0xFF),
             (unsigned)((ep_ip_u32 >> 16) & 0xFF), (unsigned)((ep_ip_u32 >> 24) & 0xFF),
@@ -2205,7 +2242,8 @@ static void dump_wg_state_snapshot(microlink_t *ml) {
             (unsigned long)last_init_age,
             (int)wp->send_handshake, (unsigned)wp->handshake_attempts,
             (int)p->has_direct_path, (int)p->derp_fallback_active,
-            (unsigned long long)last_pong_age);
+            (unsigned long long)last_pong_age,
+            (unsigned long)wg_stamp_age_ms(wp->last_rx_direct));
     }
 
     ESP_LOGW(TAG,

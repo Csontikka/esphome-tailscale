@@ -181,6 +181,12 @@ struct wireguard_peer {
 	// last_tx and last_rx of data packets
 	uint32_t last_tx;
 	uint32_t last_rx;
+	// Last authenticated packet (handshake or data) that arrived from a real UDP
+	// source, i.e. not relayed by DERP; 0 = never. last_rx counts both paths, so
+	// it cannot tell whether the direct endpoint still works: a peer whose
+	// packets only reach us through DERP keeps last_rx fresh while every packet
+	// we send to the stale direct endpoint is lost.
+	uint32_t last_rx_direct;
 	// First data packet sent since the last authenticated packet arrived, 0 = nothing
 	// unanswered. wireguard-go's timerNewHandshake: armed by data (not keepalives),
 	// disarmed by anything authenticated from the peer, fires after 15 s.
