@@ -140,6 +140,9 @@ bool wireguardif_is_wireguard_packet(const uint8_t *data, size_t len) {
 }
 
 
+// Only ever called for a packet that has just authenticated (initiation,
+// response, cookie reply, transport data), so it is also where a working direct
+// path is proven: stamp last_rx_direct here, never for DERP-relayed packets.
 static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr, u16_t port) {
 	// Don't overwrite a valid endpoint with 0.0.0.0 (DERP-injected packets have no real source)
 	// This bug was causing DERP routing to break after receiving the first packet
@@ -150,6 +153,7 @@ static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr,
 	WG_DEBUG("[WG] update_peer_addr: %s:%u\n", ipaddr_ntoa(addr), port);
 	peer->ip = *addr;
 	peer->port = port;
+	peer->last_rx_direct = wireguard_sys_now();
 }
 
 /* Count contiguous high bits in an IPv4 mask (host order). */

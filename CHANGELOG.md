@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **A direct path confirmed on the previous uplink no longer outlives a roam.** When the device moved to another Wi-Fi network (home LAN to a phone hotspot), a peer that had a direct path to it on the old network could not reach it again until a reboot. The peer falls back to the relay and its packets keep arriving, but they also kept the WireGuard `last_rx` fresh, so the trust-expiry check took them as proof that the direct endpoint still worked, kept it, and cleared `has_direct_path`, after which the check never looked at that peer again. Every reply went to an address the new uplink cannot reach; `request_reconnect()` did not help because a rebind keeps the peer table. WireGuard now stamps `last_rx_direct` only for authenticated packets from a real UDP source, the direct-data check uses it, and a direct endpoint kept by that check is re-checked on every tick and reverted to the relay once no direct packet has arrived for 30 s. A direct path that carries data keeps its endpoint as before (the throughput-collapse fix is unchanged). `[WG_SNAP]` gains a trailing `lastrx_direct=` field.
+
 ## [0.5.28] — 2026-10-20
 
 ### Fixed
