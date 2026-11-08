@@ -1445,7 +1445,7 @@ static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
             for (int i = 0; i < MAX_PENDING_PROBES; i++) {
                 if (pending_probes[i].active) active_count++;
             }
-            ESP_LOGW(TAG, "DISCO PONG unmatched from %s (via %s) txid=%02x%02x%02x%02x, active_probes=%d"
+            ESP_LOGI(TAG, "DISCO PONG unmatched from %s (via %s) txid=%02x%02x%02x%02x, active_probes=%d"
                           " (%lu more suppressed in the last 10s)",
                      name, pkt->via_derp ? "DERP" : "direct",
                      txid[0], txid[1], txid[2], txid[3], active_count,
@@ -2098,7 +2098,7 @@ static void disco_periodic_probes(microlink_t *ml) {
                 wireguardif_connect_derp(netif, (u8_t)p->wg_peer_index);
                 p->derp_fallback_active = true;
                 p->last_derp_attempt_ms = now;
-                ESP_LOGW(TAG, "DERP handshake %s -> %s (no WG session in %llus)",
+                ESP_LOGI(TAG, "DERP handshake %s -> %s (no WG session in %llus)",
                          first_attempt ? "init" : "retry",
                          p->hostname,
                          (unsigned long long)((now - p->peer_added_ms) / 1000));
@@ -2176,7 +2176,7 @@ static void disco_periodic_probes(microlink_t *ml) {
  * 2-minute throughput collapse against rekey events, keypair destruction,
  * endpoint drift, and probe leakage.
  *
- * Output format is a single ESP_LOGW line per peer (greppable with [WG_SNAP])
+ * Output format is a single ESP_LOGI line per peer (greppable with [WG_SNAP])
  * and one summary line ([WG_SNAP_SUM]). Keep field order stable across
  * commits — the operator analyses logs by column position.
  * ========================================================================== */
@@ -2225,7 +2225,7 @@ static void dump_wg_state_snapshot(microlink_t *ml) {
         uint32_t ep_ip_u32 = ip_addr_isany(&wp->ip) ? 0 : ip4_addr_get_u32(ip_2_ip4(&wp->ip));
         uint64_t last_pong_age = p->last_pong_recv_ms ? (now_ms - p->last_pong_recv_ms) : 0;
 
-        ESP_LOGW(TAG,
+        ESP_LOGI(TAG,
             "[WG_SNAP] %s wgi=%d ep=%u.%u.%u.%u:%u "
             "curr=%c(age=%lums cnt=%lu) prev=%c(age=%lums) "
             "lastrx=%lums lasttx=%lums lastinit=%lums "
@@ -2246,7 +2246,7 @@ static void dump_wg_state_snapshot(microlink_t *ml) {
             (unsigned long)wg_stamp_age_ms(wp->last_rx_direct));
     }
 
-    ESP_LOGW(TAG,
+    ESP_LOGI(TAG,
         "[WG_SNAP_SUM] peers=%d linkup=%d active_probes=%d oldest_probe_age=%llums "
         "heap_internal_free=%u",
         ml->peer_count, linkup_peers, active_probes,
@@ -2438,7 +2438,7 @@ void ml_wg_mgr_task(void *arg) {
             /* Throughput-collapse diag: only log when actually slow (>30ms),
              * routine fast ticks are noise. */
             if (dt > 30) {
-                ESP_LOGW(TAG, "wireguardif_periodic SLOW: %llu ms",
+                ESP_LOGI(TAG, "wireguardif_periodic SLOW: %llu ms",
                          (unsigned long long)dt);
             }
         }
@@ -2451,7 +2451,7 @@ void ml_wg_mgr_task(void *arg) {
             uint64_t dt = ml_get_time_ms() - t0;
             last_disco_probe_ms = now;
             if (dt > 30) {
-                ESP_LOGW(TAG, "disco_periodic_probes SLOW: %llu ms",
+                ESP_LOGI(TAG, "disco_periodic_probes SLOW: %llu ms",
                          (unsigned long long)dt);
             }
         }
