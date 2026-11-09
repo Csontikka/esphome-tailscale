@@ -953,10 +953,14 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
 
     /* TLS handshake - socket has 10s SO_RCVTIMEO from connect phase. */
     int ret;
+    /* Seconds of ECDHE + certificate-chain verification on a single-core
+     * chip: run it at loopTask's priority so loopTask is not starved. */
+    UBaseType_t tls_prio = ml_cpu_heavy_begin();
     while ((ret = mbedtls_ssl_handshake(&ml->derp.ssl)) != 0) {
         if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
             continue;
         }
+        ml_cpu_heavy_end(tls_prio);
         char err_buf[128];
         mbedtls_strerror(ret, err_buf, sizeof(err_buf));
         ESP_LOGE(TAG, "TLS handshake failed: %s", err_buf);
@@ -970,6 +974,7 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
         }
         goto fail_tls;
     }
+    ml_cpu_heavy_end(tls_prio);
 
     int64_t t_derp_tls = esp_timer_get_time();
     ESP_LOGI(TAG, "[TIMING] DERP TLS handshake: %lld ms%s", (t_derp_tls - t_derp_tcp) / 1000,

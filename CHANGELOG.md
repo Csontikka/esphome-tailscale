@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **Single-core chips (ESP32-C3, C6) no longer trip the task watchdog while the VPN connects, so a first boot after an OTA update is no longer rolled back.** All VPN tasks run above ESPHome's main loop, and on a chip with one core two long computations right after the network map arrives took the core for 5 s or more: setting up the WireGuard peers (~37 ms of X25519 each, ~1.5 s for 16 peers) followed by the relay's TLS handshake (~4 s of key exchange and certificate verification). The main loop did not run, the 5 s task watchdog reset the chip, and on the first boot after an OTA the bootloader then rolled back to the previous firmware. Both computations now run at the main loop's priority on single-core chips, so the two share the core. Measured on an ESP32-C3 with 16 peers and the debug log on: the watchdog fired in 3 of 5 boots before and in none of 5 after, the longest stretch the main loop got no CPU went from 4.5–5 s to none, and 4 of 4 OTA updates booted without a rollback. The relay connect takes about 1 s longer there. Dual-core chips are unchanged.
+
 ## [0.5.29] — 2026-11-08
 
 ### Fixed
