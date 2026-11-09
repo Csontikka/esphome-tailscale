@@ -89,6 +89,17 @@ static inline UBaseType_t ml_cpu_heavy_begin(void) { return 0; }
 static inline void ml_cpu_heavy_end(UBaseType_t prio) { (void)prio; }
 #endif
 
+/* Tunnel MTU. Tailscale's tunnel interface is 1280 bytes on every platform
+ * (the IPv6 minimum), and every peer sizes its TCP segments and its path-MTU
+ * assumptions for that. wireguard_lwip defaults the netif to WireGuard's
+ * generic 1420, which made this node advertise MSS 1380 in its SYN/SYN-ACK:
+ * a peer that trusts it (anything behind a subnet router or NAT, where the
+ * sender's own link is 1500) builds 1420-byte packets that do not fit the
+ * tunnel and must be shrunk by ICMP path-MTU discovery, or are dropped where
+ * ICMP is filtered. lwip derives the MSS it advertises from netif->mtu, so
+ * setting the netif to 1280 makes both sides agree on 1240. */
+#define ML_WG_MTU 1280
+
 #define ML_TASK_NET_IO_STACK    (6 * 1024)   /* was 8K; ~3K peak observed */
 #define ML_TASK_NET_IO_PRIO     7
 #define ML_TASK_NET_IO_CORE     0

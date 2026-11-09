@@ -452,6 +452,10 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
         return ESP_FAIL;
     }
 
+    /* Tailscale tunnel MTU (see ML_WG_MTU): wireguardif_init set WireGuard's
+     * generic 1420. Safe to write here: the netif is not in lwip's list yet. */
+    netif->mtu = ML_WG_MTU;
+
     /* Set IP addresses: our VPN IP (or temporary until we get one) */
     if (ml->vpn_ip != 0) {
         uint8_t a = (ml->vpn_ip >> 24) & 0xFF;
