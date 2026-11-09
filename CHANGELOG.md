@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.31] — 2026-11-09
+
 ### Fixed
 - **The tunnel interface uses Tailscale's 1280-byte MTU instead of WireGuard's generic 1420.** Every other Tailscale node sizes its packets for a 1280-byte tunnel, but this device advertised a TCP MSS of 1380 (1420 − 40) in its SYN/SYN-ACK, so a peer that trusted that value — typically a client behind a subnet router or NAT, whose own link is 1500 bytes — built 1420-byte packets that do not fit the tunnel and had to be shrunk by ICMP path-MTU discovery; where ICMP is filtered, an upload to the device (an OTA update over the tailnet, a POST body) stalled. The interface MTU is now 1280, so the device advertises 1240 and both sides agree from the first packet (upstream microlink issue #34). Measured from a tailnet member behind NAT with a 1500-byte link: the SYN-ACK carries `mss 1240` instead of `mss 1380`; OTA upload over the tailnet 71–72 KB/s vs. 68–71 KB/s before, ping sizes and the event stream unchanged.
 
