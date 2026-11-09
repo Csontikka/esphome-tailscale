@@ -648,7 +648,12 @@ static void wg_register_peer(microlink_t *ml, ml_peer_t *p) {
         wg_peer.keep_alive = 25;
 
         u8_t wg_peer_idx = WIREGUARDIF_INVALID_INDEX;
+        /* Each add costs ~37 ms of X25519 on an ESP32-C3 and a netmap brings
+         * them in a burst (16 peers ~1.5 s): on single-core chips run it at
+         * loopTask's priority so the two share the core. No lock is held. */
+        UBaseType_t add_prio = ml_cpu_heavy_begin();
         err_t wg_err = wireguardif_add_peer(netif, &wg_peer, &wg_peer_idx);
+        ml_cpu_heavy_end(add_prio);
 
         if (wg_err == ERR_OK && wg_peer_idx != WIREGUARDIF_INVALID_INDEX) {
             p->wg_peer_index = wg_peer_idx;

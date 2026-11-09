@@ -63,6 +63,32 @@ extern "C" {
 #define ML_CORE(n) (n)
 #endif
 
+/* Single-core chips: every microlink task outranks ESPHome's loopTask
+ * (priority 1), so seconds of CPU work in one of them starve it, and the
+ * task watchdog (5 s) resets the chip — on the first boot after an OTA that
+ * rolls the update back. Measured on an ESP32-C3 with 16 peers: the DERP TLS
+ * handshake takes ~3.9 s of CPU right after ~1.5 s of WireGuard peer setup
+ * (X25519 per peer), and loopTask got 0 % for 5.0 s.
+ *   ml_cpu_heavy_begin()/end(): run a long computation at loopTask's
+ *     priority, so the scheduler time-slices the two instead of starving
+ *     loopTask. Do not hold a mutex across it (priority inheritance would
+ *     undo it).
+ * No-ops on dual-core chips, where loopTask has its own core. */
+#if CONFIG_FREERTOS_UNICORE || (defined(portNUM_PROCESSORS) && portNUM_PROCESSORS == 1)
+#define ML_CPU_HEAVY_PRIO 1  /* ESPHome loopTask priority */
+static inline UBaseType_t ml_cpu_heavy_begin(void) {
+    UBaseType_t prio = uxTaskPriorityGet(NULL);
+    if (prio > ML_CPU_HEAVY_PRIO) vTaskPrioritySet(NULL, ML_CPU_HEAVY_PRIO);
+    return prio;
+}
+static inline void ml_cpu_heavy_end(UBaseType_t prio) {
+    if (prio != uxTaskPriorityGet(NULL)) vTaskPrioritySet(NULL, prio);
+}
+#else
+static inline UBaseType_t ml_cpu_heavy_begin(void) { return 0; }
+static inline void ml_cpu_heavy_end(UBaseType_t prio) { (void)prio; }
+#endif
+
 #define ML_TASK_NET_IO_STACK    (6 * 1024)   /* was 8K; ~3K peak observed */
 #define ML_TASK_NET_IO_PRIO     7
 #define ML_TASK_NET_IO_CORE     0
