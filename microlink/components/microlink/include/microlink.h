@@ -331,6 +331,13 @@ typedef struct {
  * the number written (0 if no netcheck has run yet). */
 int microlink_get_derp_rtts(const microlink_t *ml, microlink_derp_rtt_t *out, int max);
 
+/* WireGuard TX path diagnostics. copyfree: encrypt in place in the outgoing SPIRAM pbuf
+ * (default) or build in an internal pbuf and copy (the earlier path). The profile
+ * counts packets and microseconds from output-pbuf allocation to release; reset clears both. */
+esp_err_t microlink_set_wg_tx_copyfree(microlink_t *ml, bool on);
+bool microlink_get_wg_tx_copyfree(const microlink_t *ml);
+void microlink_get_wg_tx_profile(uint32_t *pkts, uint64_t *us, bool reset);
+
 /* Returns the human-readable city name for a DERP region (from the
  * MapResponse DERPMap.RegionName field). Returns NULL if region_id is
  * unknown — the caller should fall through to a "?" placeholder. */

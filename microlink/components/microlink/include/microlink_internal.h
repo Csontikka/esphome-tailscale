@@ -644,6 +644,7 @@ struct microlink_s {
      * Same index as derp_regions; 0 = no measurement / timed out. */
     uint16_t derp_rtt_ms[ML_MAX_DERP_REGIONS];
     bool netinfo_dirty;            /* derp_home_region changed since the last Hostinfo the control plane saw */
+    bool wg_tx_copyfree;           /* WireGuard TX: encrypt in place in the outgoing pbuf (true) or build + copy (false) */
     /* The DERPMap the last netcheck measured (fingerprint of region ids,
      * node hostnames and STUN ports), when it ran and what it picked - a
      * DERPMap arriving again unchanged on the stream reuses the result
@@ -779,6 +780,7 @@ void ml_net_io_task(void *arg);
 void ml_derp_tx_task(void *arg);
 void ml_derp_rx_task(void *arg);
 esp_err_t ml_derp_connect(microlink_t *ml);
+esp_err_t ml_wg_set_tx_copyfree(microlink_t *ml, bool on);
 void ml_derp_disconnect(microlink_t *ml);
 
 /* Every microlink task calls this as its LAST statement before

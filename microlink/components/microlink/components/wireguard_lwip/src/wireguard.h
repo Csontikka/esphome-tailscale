@@ -89,6 +89,16 @@ typedef err_t (*wireguard_derp_output_fn)(const uint8_t *peer_public_key, const 
 // Returns: ERR_OK on success, error code on failure
 typedef err_t (*wireguard_udp_output_fn)(uint32_t dest_ip, uint16_t dest_port, const uint8_t *data, size_t len, void *ctx);
 
+// Optional pair for magicsock mode that avoids the per-packet copies:
+//  tx_pbuf_alloc_fn: a contiguous pbuf of `len` bytes with PBUF_TRANSPORT headroom; the
+//    transport packet is built and encrypted in place in it. NULL -> the caller falls back
+//    to pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM).
+//  udp_pbuf_output_fn: send that pbuf as it is (udp_sendto prepends the headers into the
+//    headroom). The callback must not free or keep it; the caller frees it afterwards, so
+//    a driver that keeps a reference must take its own (pbuf_ref), as lwIP's do.
+typedef struct pbuf *(*wireguard_tx_pbuf_alloc_fn)(u16_t len, void *ctx);
+typedef err_t (*wireguard_udp_pbuf_output_fn)(uint32_t dest_ip, uint16_t dest_port, struct pbuf *p, void *ctx);
+
 struct wireguard_keypair {
 	bool valid;
 	bool initiator; // Did we initiate this session (send the initiation packet rather than sending the response packet)
@@ -228,6 +238,11 @@ struct wireguard_device {
 	// UDP output callback for magicsock mode (external unified socket)
 	wireguard_udp_output_fn udp_output_fn;
 	void *udp_output_ctx;
+
+	// Copy-free variant (see the typedefs): both or neither
+	wireguard_tx_pbuf_alloc_fn tx_pbuf_alloc_fn;
+	wireguard_udp_pbuf_output_fn udp_pbuf_output_fn;
+	void *tx_pbuf_ctx;
 
 	// Force all peer output through DERP relay (cellular mode)
 	bool force_derp_output;
