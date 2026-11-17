@@ -195,6 +195,14 @@ void wireguardif_disable_socket_bind(void);
 // via an external unified socket instead of the internal lwIP UDP PCB.
 void wireguardif_set_udp_output(struct netif *netif, wireguard_udp_output_fn fn, void *ctx);
 
+// Copy-free magicsock output: the transport packet is encrypted in place in a pbuf from
+// alloc_fn and handed to output_fn as it is. Both NULL restores the copying path.
+void wireguardif_set_tx_pbuf_output(struct netif *netif, wireguard_tx_pbuf_alloc_fn alloc_fn,
+                                    wireguard_udp_pbuf_output_fn output_fn, void *ctx);
+
+// TX cost counters: packets and microseconds spent from output-pbuf allocation to release.
+void wireguardif_tx_profile(uint32_t *pkts, uint64_t *us, bool reset);
+
 // Force all peer output through DERP relay callback (cellular mode).
 // When enabled, peer_output always uses DERP even if peer has a direct endpoint.
 void wireguardif_force_derp_output(struct netif *netif, bool force);

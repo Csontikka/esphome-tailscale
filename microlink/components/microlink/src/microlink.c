@@ -829,6 +829,9 @@ const char *microlink_get_derp_region_name(const microlink_t *ml, uint16_t regio
     return NULL;
 }
 
+esp_err_t microlink_set_wg_tx_copyfree(microlink_t *ml, bool on) { return ml_wg_set_tx_copyfree(ml, on); }
+bool microlink_get_wg_tx_copyfree(const microlink_t *ml) { return ml ? ml->wg_tx_copyfree : false; }
+
 int microlink_get_derp_rtts(const microlink_t *ml, microlink_derp_rtt_t *out, int max) {
     if (!ml || !out || max <= 0) return 0;
     int count = 0;

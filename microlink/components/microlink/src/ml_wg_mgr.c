@@ -317,104 +317,131 @@ static void ml_spiram_pbuf_free_fn(struct pbuf *p) {
     heap_caps_free(wrap);
 }
 
-static err_t wg_udp_output_cb(uint32_t dest_ip, uint16_t dest_port,
-                                const uint8_t *data, size_t len, void *ctx) {
-    microlink_t *ml = (microlink_t *)ctx;
-    if (!ml) return ERR_CONN;
-
-    /* Log WG packets sent via direct UDP */
-    uint32_t ip_host = ntohl(dest_ip);
-    ESP_LOGI(TAG, "WG UDP TX: %d bytes -> %d.%d.%d.%d:%d type=%d",
-             (int)len,
-             (int)((ip_host >> 24) & 0xFF), (int)((ip_host >> 16) & 0xFF),
-             (int)((ip_host >> 8) & 0xFF), (int)(ip_host & 0xFF),
-             (int)dest_port,
-             len >= 1 ? data[0] : -1);
-
-    /* Use raw PCB to send — safe from any thread context */
-    if (!s_wg_output_pcb) return ERR_CONN;
-
-    /* Throughput-stability fix (2026-05-24, re-applied after the WiFi
-     * channel-mismatch fix uncovered this as the residual stutter
-     * source): the original `pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM)`
-     * goes to lwIP's internal-DRAM pool. Under sustained ~140 pps to a
-     * single peer that pool fragments, and 1312-byte mem_malloc starts
-     * failing (-1 ERR_MEM) at ~5/sec, producing visible speedtest
-     * stuttering. Move the per-packet payload to SPIRAM via the
-     * standard pbuf_alloced_custom() pattern — we have 8 MB of SPIRAM
-     * idle and the ~10 us extra latency is invisible next to the WG
-     * crypto cost. Wrapper struct stays on INTERNAL heap (tiny, ~16 B)
-     * because lwIP/WiFi may touch pbuf metadata from contexts where
-     * SPIRAM access is unsafe (cache-disable windows). */
-    /* PBUF_TRANSPORT headroom so lwIP can prepend UDP+IP+Ether headers
-     * in-place into the SPIRAM buffer instead of allocating a new
-     * internal-DRAM pbuf for them per packet. lwIP positions the payload
-     * at `payload_mem + LWIP_MEM_ALIGN_SIZE(layer_offset)`, so the
-     * memcpy offset MUST match that exact computation (the earlier
-     * attempt used the raw layer value and shipped corrupted data
-     * because the aligned offset was 2 B off — fixed here by using the
-     * same LWIP_MEM_ALIGN_SIZE macro for both sides). */
+/* A contiguous pbuf of `len` payload bytes with PBUF_TRANSPORT headroom, so
+ * lwIP prepends the UDP/IP/Ethernet headers in place instead of allocating an
+ * internal-DRAM pbuf for them per packet. The payload goes to SPIRAM (the
+ * default heap only on a board that has no SPIRAM heap at all, #48); the ~32 B
+ * wrapper stays on the internal heap (see ml_spiram_pbuf_t).
+ *
+ * Why SPIRAM (2026-05-24): lwIP's PBUF_RAM pool is internal DRAM; under a
+ * sustained ~140 pps to one peer it fragments and 1312-byte allocations start
+ * failing (ERR_MEM, visible as throughput stutter). lwIP places the payload at
+ * `payload_mem + LWIP_MEM_ALIGN_SIZE(layer_offset)`, which pbuf_alloced_custom
+ * computes itself: write through p->payload, never through a hand-made offset. */
+static struct pbuf *ml_spiram_pbuf_new(u16_t len) {
     const u16_t hdr_offset = (u16_t)LWIP_MEM_ALIGN_SIZE((u16_t)PBUF_TRANSPORT);
     const u16_t total_len = (u16_t)(hdr_offset + len);
-    ml_spiram_pbuf_t *wrap = heap_caps_malloc(sizeof(*wrap),
-                                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!wrap) return ERR_MEM;
-    /* #48: SPIRAM as before; the default heap only on a board that has no
-     * SPIRAM heap at all. */
+    ml_spiram_pbuf_t *wrap = heap_caps_malloc(sizeof(*wrap), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!wrap) return NULL;
     static int8_t no_spiram = -1;
     if (no_spiram < 0) no_spiram = (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) ? 1 : 0;
     wrap->data_spiram = heap_caps_malloc(total_len, no_spiram ? MALLOC_CAP_DEFAULT
                                                               : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!wrap->data_spiram) {
         heap_caps_free(wrap);
-        return ERR_MEM;
+        return NULL;
     }
-    memcpy((uint8_t *)wrap->data_spiram + hdr_offset, data, len);
     wrap->pc.custom_free_function = ml_spiram_pbuf_free_fn;
-    struct pbuf *p = pbuf_alloced_custom(PBUF_TRANSPORT, (u16_t)len, PBUF_REF,
-                                          &wrap->pc, wrap->data_spiram, total_len);
+    struct pbuf *p = pbuf_alloced_custom(PBUF_TRANSPORT, len, PBUF_REF, &wrap->pc, wrap->data_spiram, total_len);
     if (!p) {
         heap_caps_free(wrap->data_spiram);
         heap_caps_free(wrap);
-        return ERR_MEM;
+        return NULL;
     }
+    return p;
+}
 
+/* Send p from the magicsock output PCB. udp_sendto() is raw lwIP core API and
+ * is only thread-safe on tcpip_thread. The WireGuard output runs there for
+ * application traffic (an app socket's send routed through the WG netif) but
+ * on the wg_mgr task for handshakes, keepalives and the periodic housekeeping.
+ * Dispatch in the latter case; calling tcpip_callback() and blocking for it
+ * while already on tcpip_thread would deadlock, hence the explicit check
+ * (upstream microlink PR #28). Does not free p. */
+static err_t wg_udp_send_pbuf(struct pbuf *p, uint32_t dest_ip, uint16_t dest_port) {
     ip_addr_t dst;
     IP_SET_TYPE_VAL(dst, IPADDR_TYPE_V4);
     ip4_addr_set_u32(ip_2_ip4(&dst), dest_ip);  /* already network byte order */
 
-    /* udp_sendto() is raw lwIP core API and is only thread-safe on
-     * tcpip_thread. This callback runs there for application traffic (an
-     * app socket's send routed through the WG netif) but on the wg_mgr task
-     * for handshakes, keepalives and the periodic housekeeping. Dispatch in
-     * the latter case; calling tcpip_callback() and blocking for it while
-     * already on tcpip_thread would deadlock, hence the explicit check
-     * (upstream microlink PR #28). */
-    err_t err;
     if (sys_thread_tcpip(LWIP_CORE_LOCK_QUERY_HOLDER)) {
-        err = udp_sendto(s_wg_output_pcb, p, &dst, dest_port);
-    } else {
-        wg_udp_send_ctx_t sctx = {
-            .pcb = s_wg_output_pcb, .p = p, .dst = dst, .port = dest_port,
-            .done = xSemaphoreCreateBinary(),
-        };
-        if (!sctx.done) {
-            pbuf_free(p);
-            return ERR_MEM;
-        }
-        err_t cb_err = tcpip_callback(wg_udp_sendto_in_tcpip, &sctx);
-        if (cb_err != ERR_OK) {
-            vSemaphoreDelete(sctx.done);
-            pbuf_free(p);
-            return cb_err;
-        }
-        xSemaphoreTake(sctx.done, portMAX_DELAY);
-        vSemaphoreDelete(sctx.done);
-        err = sctx.result;
+        return udp_sendto(s_wg_output_pcb, p, &dst, dest_port);
     }
+    wg_udp_send_ctx_t sctx = {
+        .pcb = s_wg_output_pcb, .p = p, .dst = dst, .port = dest_port,
+        .done = xSemaphoreCreateBinary(),
+    };
+    if (!sctx.done) return ERR_MEM;
+    err_t cb_err = tcpip_callback(wg_udp_sendto_in_tcpip, &sctx);
+    if (cb_err != ERR_OK) {
+        vSemaphoreDelete(sctx.done);
+        return cb_err;
+    }
+    xSemaphoreTake(sctx.done, portMAX_DELAY);
+    vSemaphoreDelete(sctx.done);
+    return sctx.result;
+}
+
+static void wg_log_udp_tx(uint32_t dest_ip, uint16_t dest_port, size_t len, int type) {
+    uint32_t ip_host = ntohl(dest_ip);
+    ESP_LOGI(TAG, "WG UDP TX: %d bytes -> %d.%d.%d.%d:%d type=%d",
+             (int)len,
+             (int)((ip_host >> 24) & 0xFF), (int)((ip_host >> 16) & 0xFF),
+             (int)((ip_host >> 8) & 0xFF), (int)(ip_host & 0xFF),
+             (int)dest_port, type);
+}
+
+/* Copying output (wireguardif_set_udp_output): `data` is the linearised
+ * packet; it is copied into a SPIRAM pbuf and sent. Used when the copy-free
+ * hooks below are off, and for a chained pbuf. */
+static err_t wg_udp_output_cb(uint32_t dest_ip, uint16_t dest_port,
+                                const uint8_t *data, size_t len, void *ctx) {
+    microlink_t *ml = (microlink_t *)ctx;
+    if (!ml) return ERR_CONN;
+    wg_log_udp_tx(dest_ip, dest_port, len, len >= 1 ? data[0] : -1);
+    if (!s_wg_output_pcb) return ERR_CONN;
+
+    struct pbuf *p = ml_spiram_pbuf_new((u16_t)len);
+    if (!p) return ERR_MEM;
+    memcpy(p->payload, data, len);
+    err_t err = wg_udp_send_pbuf(p, dest_ip, dest_port);
     pbuf_free(p);
     return err;
 }
+
+/* Copy-free output (wireguardif_set_tx_pbuf_output): the transport packet is
+ * built and encrypted in place in a pbuf from wg_tx_pbuf_alloc_cb and sent as
+ * it is. Per data packet this replaces an internal PBUF_RAM (~1.3 KB), a
+ * linearise buffer, a second payload buffer and two copies with one payload
+ * buffer and no copy; with PSRAM the internal heap sees only the 32 B wrapper.
+ * (Csontikka/microlink a85e8c4.) */
+static struct pbuf *wg_tx_pbuf_alloc_cb(u16_t len, void *ctx) {
+    (void)ctx;
+    return ml_spiram_pbuf_new(len);
+}
+
+static err_t wg_udp_pbuf_output_cb(uint32_t dest_ip, uint16_t dest_port, struct pbuf *p, void *ctx) {
+    microlink_t *ml = (microlink_t *)ctx;
+    if (!ml || !p) return ERR_CONN;
+    wg_log_udp_tx(dest_ip, dest_port, p->tot_len, p->tot_len >= 1 ? ((const uint8_t *)p->payload)[0] : -1);
+    if (!s_wg_output_pcb) return ERR_CONN;
+    /* udp_sendto prepends its headers into the headroom and leaves payload/len
+     * on them; the caller only frees p after we return. */
+    return wg_udp_send_pbuf(p, dest_ip, dest_port);
+}
+
+/* Runtime switch for the copy-free path (A/B on a live device). Either value of
+ * the two hook pointers is safe mid-packet: a hook pbuf sent by the copying path
+ * is linearised like any other, a PBUF_RAM sent by the pbuf path is contiguous. */
+esp_err_t ml_wg_set_tx_copyfree(microlink_t *ml, bool on) {
+    if (!ml || !ml->wg_netif) return ESP_ERR_INVALID_STATE;
+    wireguardif_set_tx_pbuf_output((struct netif *)ml->wg_netif,
+                                   on ? wg_tx_pbuf_alloc_cb : NULL, on ? wg_udp_pbuf_output_cb : NULL, ml);
+    ml->wg_tx_copyfree = on;
+    ESP_LOGI(TAG, "WG TX copy-free path %s", on ? "ON" : "OFF (copying path)");
+    return ESP_OK;
+}
+
+void microlink_get_wg_tx_profile(uint32_t *pkts, uint64_t *us, bool reset) { wireguardif_tx_profile(pkts, us, reset); }
 
 /* ============================================================================
  * WireGuard Interface Initialization
@@ -493,6 +520,8 @@ static esp_err_t wg_init_interface(microlink_t *ml) {
     /* Register output callbacks for magicsock mode */
     wireguardif_set_derp_output(netif, wg_derp_output_cb, ml);
     wireguardif_set_udp_output(netif, wg_udp_output_cb, ml);
+    ml->wg_tx_copyfree = true;
+    wireguardif_set_tx_pbuf_output(netif, wg_tx_pbuf_alloc_cb, wg_udp_pbuf_output_cb, ml);
 
     /* On cellular AT socket bridge, force all WG output through DERP relay.
      * AT sockets are TCP-only, so direct UDP is impossible.
