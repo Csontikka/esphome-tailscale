@@ -10,6 +10,8 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+## [0.5.32] — 2026-11-17
+
 ### Changed
 - **Outgoing WireGuard packets are encrypted in place in the buffer that goes out on the wire.** A data packet used to be built and encrypted in an lwIP buffer on the internal heap, copied into a linearise buffer and copied again into the buffer handed to the socket layer: three ~1.3 KB allocations and two copies per packet. It is now built and encrypted directly in the outgoing buffer (in PSRAM where the board has it): one allocation of that size, no copy. Handshake packets take the same path. Measured on an ESP32-S3 in the same boot with a runtime switch between the two paths: CPU time per sent packet 1714 → 1666 µs (−2.8 %) and 192 → 196 KB/s on a 2 MB TCP download from the device over the tailnet (4 runs each); under an ICMP flood the cost per packet is 3–5 % lower and heap minima, drops and send failures are the same. On an ESP32-C3 without PSRAM: 2067 → 1994 µs per packet (−3.5 %), throughput and the free-heap minimum unchanged, the largest free block during the download a little higher (8–9 KB → 10.7 KB). Ported from the Csontikka/microlink fork (a85e8c4).
 
