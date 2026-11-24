@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Fixed
+- **A burst of failed sends no longer logs one warning per packet.** When the device cannot hand packets to WiFi fast enough (the transmit queue is full), every packet of the burst fails, and each one used to log a `[WG_OUT_FAIL]` warning from the network thread — hundreds of lines per second, with the debug-log switch off as well. On a single-core chip that starved ESPHome's main loop into the task watchdog: an ESP32-C3 built with ESPHome 2026.11.0 rebooted in 2 of 2 runs of a 30-second ping flood over the tailnet combined with REST requests and SSE reconnects on the LAN (the same firmware source built with ESPHome 2026.6.5 survived the one run tried). The warning is now logged once per 10 seconds, with the number of failures it stands for; with that the same test passed 3 of 3 runs on ESPHome 2026.11.0, with 5–8 warning lines per run.
+
 ### Documentation
 - **README: ESPHome 2026.11.0 or newer is recommended when `web_server:` is used.** Older ESPHome versions leave the HTTP server task almost no stack: on an ESP32-S3 with the full entity package a single REST request left 216 of 4352 bytes free on ESPHome 2026.6.5 (104 bytes under a ping flood over the tailnet, and 256–400 bytes on the same board with no Tailscale in the config), which is how a `stack overflow in task httpd` reboot comes about. ESPHome 2026.11.0 leaves 736 bytes in the same test. Nothing changed in the component; there is a new Troubleshooting entry.
 
