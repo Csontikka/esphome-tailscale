@@ -71,7 +71,7 @@ Boards currently verified:
 
 ### Software
 
-- **ESPHome 2026.3.1** or newer
+- **ESPHome 2026.3.1** or newer — **2026.11.0 or newer is recommended if you use `web_server:`** ([why](#the-device-reboots-with-a-stack-overflow-in-task-httpd-has-been-detected))
 - **ESP-IDF framework** (not Arduino) — this is enforced automatically by the package
 - **Network connectivity — WiFi *or* Ethernet.** The component needs a network, not WiFi specifically; a `wifi:` or an `ethernet:` block (e.g. W5500 / LAN8720 boards such as the Waveshare ESP32-S3-ETH) both work. A config with neither is rejected at validation.
 - **Home Assistant** with the ESPHome integration enabled
@@ -866,6 +866,10 @@ If it still fails at 128 KB, the board genuinely has no room left — free PSRAM
 ### The device reboots every 30–40 s after connecting, and an OTA "reverts itself"
 
 If the serial log ends with `task_wdt: Task watchdog got triggered … - loopTask` and `CPU 1: ml_wg_mgr`, a peer is probing this node hard enough that the DISCO/WireGuard manager starved ESPHome's main loop for more than 5 seconds. Since v0.5.7 the manager budgets its work per iteration so the main loop always gets CPU, and logs one `DISCO: N packets in 10 s …` line per 10 seconds while it lasts; if you still see that line reporting many packets per second, look for the peer that never completes a WireGuard session with this node ([#46](https://github.com/Csontikka/esphome-tailscale/issues/46)). Since v0.5.8 the node also backs off by itself — it no longer answers a CallMeMaybe with one of its own and does not heartbeat a peer it has no WireGuard session with — so a storm like that can only be kept up by an older microlink build on the other end; updating that node ends it. Note that the ESPHome API log stream drops the last lines before an abort — only the UART shows the watchdog report.
+
+### The device reboots with `A stack overflow in task httpd has been detected`
+
+That task is ESPHome's `web_server:` HTTP server, not this component, and before ESPHome 2026.11.0 it had very little stack to spare. Measured on an ESP32-S3 with this project's full entity package: on ESPHome 2026.6.5 a single REST request (`GET /sensor/...`) left 216 of the task's 4352 bytes free, and 104 bytes while the device was also answering a ping flood over the tailnet; the same board without Tailscale in the config left 256–400 bytes. An interrupt that lands at the deepest point of a request can use up a margin that small, and the device reboots. ESPHome 2026.11.0 enlarged the task ([esphome#21038](https://github.com/esphome/esphome/pull/21038)), and a request also uses less of it there: the same test leaves 736 bytes free under the flood. **Update ESPHome to 2026.11.0 or newer.** If you cannot, keep the load on the web server low — close browser tabs that keep the device page open, and do not poll its REST endpoints while the device is busy.
 
 ### Auth key expired
 
