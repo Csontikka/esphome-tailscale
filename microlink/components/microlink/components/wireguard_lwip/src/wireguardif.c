@@ -337,14 +337,29 @@ done:
 	 * (handshake/cookie) always log their routing decision so the SD recorder
 	 * shows which branch a DERP-only peer takes + whether the DERP cb exists. */
 	if (result != ERR_OK) {
-		ESP_LOGW(TAG, "[WG_OUT_FAIL] peer=%02x%02x%02x%02x mt=%u path=%s ep=%s:%u "
-		       "len=%u derp_fn=%d force_derp=%d err=%d",
-		       peer->public_key[0], peer->public_key[1],
-		       peer->public_key[2], peer->public_key[3],
-		       wg_mt, path,
-		       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
-		       peer->port, (unsigned)q_len,
-		       device->derp_output_fn ? 1 : 0, device->force_derp_output, (int)result);
+		/* One line per 10 s, with the number of failures it stands for. A send
+		 * that fails because the WiFi TX queue is full fails for every packet of
+		 * the burst: a line per packet (hundreds per second, from the TCPIP
+		 * thread) starved the main loop into the task watchdog on a single-core
+		 * chip. Only this thread sends, so plain statics are enough. */
+		static uint32_t fail_log_ms = 0;
+		static uint32_t fail_suppressed = 0;
+		uint32_t now_ms = sys_now();
+		if (fail_log_ms == 0 || (uint32_t)(now_ms - fail_log_ms) >= 10000) {
+			ESP_LOGW(TAG, "[WG_OUT_FAIL] peer=%02x%02x%02x%02x mt=%u path=%s ep=%s:%u "
+			       "len=%u derp_fn=%d force_derp=%d err=%d (%lu more send failures in the last 10 s)",
+			       peer->public_key[0], peer->public_key[1],
+			       peer->public_key[2], peer->public_key[3],
+			       wg_mt, path,
+			       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
+			       peer->port, (unsigned)q_len,
+			       device->derp_output_fn ? 1 : 0, device->force_derp_output, (int)result,
+			       (unsigned long)fail_suppressed);
+			fail_log_ms = now_ms ? now_ms : 1;
+			fail_suppressed = 0;
+		} else {
+			fail_suppressed++;
+		}
 	} else if (wg_ctrl) {
 		WG_HSLOG("[WG_OUT_OK] peer=%02x%02x%02x%02x mt=%u path=%s ep=%s:%u "
 		       "len=%u derp_fn=%d force_derp=%d",
