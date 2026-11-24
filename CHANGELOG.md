@@ -10,6 +10,9 @@ once a `1.0.0` release is cut. While the version is still in the `0.x` range,
 
 ## [Unreleased]
 
+### Documentation
+- **README: ESPHome 2026.11.0 or newer is recommended when `web_server:` is used.** Older ESPHome versions leave the HTTP server task almost no stack: on an ESP32-S3 with the full entity package a single REST request left 216 of 4352 bytes free on ESPHome 2026.6.5 (104 bytes under a ping flood over the tailnet, and 256–400 bytes on the same board with no Tailscale in the config), which is how a `stack overflow in task httpd` reboot comes about. ESPHome 2026.11.0 leaves 736 bytes in the same test. Nothing changed in the component; there is a new Troubleshooting entry.
+
 ## [0.5.32] — 2026-11-17
 
 ### Changed
